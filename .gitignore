@@ -1,0 +1,12 @@
+# Environnements virtuels
+venv/
+env/
+
+# Fichiers compilés Python
+__pycache__/
+*.pyc
+
+# Modèles IA (GitHub limite la taille des fichiers)
+*.h5
+*.tflite
+*.caffemodel
