@@ -1,0 +1,2 @@
+# Version "contrib" directement : c'est celle que MediaPipe installera (évite le conflit avec opencv-python)
+opencv-contrib-python
