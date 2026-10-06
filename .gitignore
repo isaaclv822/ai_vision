@@ -12,3 +12,12 @@ __pycache__/
 *.tflite
 *.caffemodel
 *.onnx
+
+# Données biométriques : photos des personnes autorisées.
+# Ne jamais versionner (données personnelles).
+autorises/
+
+# Documents de travail personnels (non partages avec le reste du groupe)
+docs/AVANCEMENT_IA.md
+docs/SOUTENANCE.md
+*.docx

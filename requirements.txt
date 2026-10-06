@@ -1,5 +1,10 @@
+# Tout le pipeline vision tient dans ce seul paquet :
+#  - capture video et affichage (cv2.VideoCapture, cv2.imshow)
+#  - detection de visage       (cv2.FaceDetectorYN, modele YuNet)
+#  - reconnaissance faciale    (cv2.FaceRecognizerSF, modele SFace)
+# Attention : ne PAS installer opencv-python en plus, les deux paquets
+# fournissent le meme module cv2 et entrent en conflit.
 opencv-contrib-python
-opencv-python 
-mediapipe
-deepface 
-tf-keras
+
+# Jour 3, partie Dev : publication MQTTS vers le serveur Kali
+# paho-mqtt
