@@ -50,8 +50,7 @@ Règles :
 
 ## État actuel
 
-Jour 1 = réflexion uniquement : **aucun code n'est encore écrit** (`main.py`, `requirements.txt`
-et `test_ia.py` sont vides). Ce qui suit est la conception prévue pour `main.py` :
+Jour 1 = réflexion. Étape 1 du code faite (`test_ia.py` encore vide) — `main.py` :
 - Capture webcam (`cv2.VideoCapture(0, cv2.CAP_DSHOW)` sous Windows), resize 640x480.
 - Sonde de performance : temps de traitement (vert < 100 ms, rouge au-delà) + FPS, lissés.
 - Sortie avec `q` ou la croix de la fenêtre, libération propre de la caméra.
@@ -60,9 +59,16 @@ et `test_ia.py` sont vides). Ce qui suit est la conception prévue pour `main.py
 - `send_alert(type_alerte, details)` : mock qui affiche le JSON final
   `{"node_id", "type", "timestamp", "details"}`. Au jour 3, seul le `print` devient `client.publish(...)`.
 
+Étape 2 faite — machine à états :
+- `MachineEtats` (VERT / ORANGE / ROUGE, `time.monotonic()`, retour au VERT après 0,5 s découvert)
+  et `visage_menace(visages)` (seuil de confiance, aucun visage = menace).
+- Publie `CHANGEMENT_ETAT` ou `ALERTE_INTRUSION` via `send_alert` à chaque changement.
+- `MODE_SIMULATION = True` : touches `m` (masque) et `n` (aucun visage) remplacent l'IA.
+  Passer à `False` une fois `analyser_trame` branchée.
+
 À faire :
 - Jour 2 (avec le binôme IA) : intégrer MediaPipe + modèle masque dans `analyser_trame`,
-  recadrage du visage, machine à états.
+  recadrage du visage. **En attente du modèle.**
 - Jour 3 : vraie publication MQTTS (topic, certificat et format à valider avec la cyber),
   seuils de confiance, interface type « terminal de sécurité », répétition de la démo.
 
