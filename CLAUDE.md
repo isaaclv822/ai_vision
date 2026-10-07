@@ -71,8 +71,11 @@ Fait dans `main.py` :
 - Sonde de performance lissée (traitement, FPS, détail détection / IA).
 - IA branchée : `ia.initialize()` avant la boucle, `analyser_trame` → `ia.analyze_frame`, touche `r`
   pour recharger `autorises/`.
-- `cause_menace(visages)` + `MachineEtats`. Publie `CHANGEMENT_ETAT` / `ALERTE_INTRUSION` avec
-  `{etat, etat_precedent, cause, identites, duree_menace_s}`.
+- `cause_menace(visages)` + `MachineEtats`. Publie `CHANGEMENT_ETAT` / `ALERTE_INTRUSION` à chaque
+  changement, et `ETAT_PERIODIQUE` toutes les 2 s (sinon le dashboard déclarerait la vision muette).
+  `details` = `{etat, cause, identites, similarite, traitement_ms, duree_menace_s}` (+ `etat_precedent`
+  pour un changement). Le dashboard reçoit ce `details` tel quel, pas l'enveloppe.
+  Prévenir l'autre dev : le trafic vision est périodique (base de référence de son Isolation Forest).
 - `send_alert` : mock (`print` du JSON). Le vrai envoi réseau sera fait par celui qui gère le réseau.
 - Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).

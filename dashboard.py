@@ -93,10 +93,10 @@ class DonneesSimulees:
             if self.phase_precedente != phase:
                 self.debut_intrusion = time.monotonic()
             etat = "ROUGE" if time.monotonic() - self.debut_intrusion >= 3 else "ORANGE"
-            donnees.append(("vision", {"etat": etat, "cause": "visage_inconnu",
+            donnees.append(("vision", {"etat": etat, "cause": "visage_inconnu", "identites": [],
                                        "similarite": 0.21, "traitement_ms": random.gauss(30, 4)}))
         else:
-            donnees.append(("vision", {"etat": "VERT", "cause": None,
+            donnees.append(("vision", {"etat": "VERT", "cause": None, "identites": ["simulation"],
                                        "similarite": 0.88, "traitement_ms": random.gauss(30, 4)}))
 
         # Capteurs (rien quand on simule un capteur coupé par un attaquant)
@@ -268,6 +268,7 @@ class Dashboard:
         self.tuile_vision = Tuile(r, "VISION")
         self.tuile_vision.cadre.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
         self.label_etat_vision = self.tuile_vision.ligne("Etat : --", 14)
+        self.label_identites = self.tuile_vision.ligne("Identites : --")
         self.label_cause_vision = self.tuile_vision.ligne("Cause : --")
         self.label_confiance = self.tuile_vision.ligne("Confiance du modele : --")
         self.label_traitement = self.tuile_vision.ligne("Traitement : --")
@@ -333,6 +334,8 @@ class Dashboard:
         """
         POINT DE BRANCHEMENT : à appeler pour chaque donnée reçue d'une source.
         Aujourd'hui alimenté par DonneesSimulees ; demain par les vraies sources.
+        Pour la vision : donnees = le champ "details" des messages de main.py
+        (etat, cause, identites, similarite, traitement_ms), pas l'enveloppe complète.
         """
         if source in SOURCES:
             self.derniere_vue[source] = time.monotonic()
@@ -348,7 +351,16 @@ class Dashboard:
                 else:
                     self.noter(f"vision {etat}" + (f" ({cause})" if cause else ""), etat)
             self.etat_vision, self.cause_vision = etat, cause
-            self.label_confiance.config(text=f"Confiance du modele : {donnees['similarite'] * 100:.0f} %")
+            noms = donnees["identites"]
+            if noms:
+                self.label_identites.config(text="ACCES AUTORISE : " + ", ".join(noms),
+                                            fg=COULEURS["VERT"])
+            else:
+                self.label_identites.config(text="Identites : aucune reconnue", fg=TEXTE)
+            # Similarité absente quand aucun visage n'est dans le champ
+            similarite = donnees["similarite"]
+            self.label_confiance.config(text="Confiance du modele : "
+                                        + ("--" if similarite is None else f"{similarite * 100:.0f} %"))
             self.label_traitement.config(text=f"Traitement : {donnees['traitement_ms']:.0f} ms")
 
         elif source == "capteurs":
