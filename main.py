@@ -9,6 +9,7 @@ L'IA (détection + reconnaissance faciale) vit dans facial_recognition.py.
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import cv2
 
@@ -32,6 +33,9 @@ SEUIL_CONFIANCE = 0.80             # Réservé au futur modèle d'obstruction
 
 # Simulation au clavier, pour tester sans webcam ni modèle
 MODE_SIMULATION = False
+
+# Photo enregistrée au passage en ROUGE : reste sur ce PC, ne part jamais sur le réseau
+DOSSIER_CAPTURES = Path(__file__).parent / "captures"
 
 COULEUR_VERT = (0, 200, 0)         # Couleurs OpenCV en BGR
 COULEUR_ORANGE = (0, 165, 255)
@@ -85,6 +89,14 @@ def send_alert(type_alerte, details):
         "details": details,
     }
     print(json.dumps(message, ensure_ascii=False))
+
+
+def enregistrer_capture(frame):
+    """Photo locale au passage en ROUGE : la preuve de l'intrusion."""
+    DOSSIER_CAPTURES.mkdir(exist_ok=True)
+    chemin = DOSSIER_CAPTURES / time.strftime("intrusion_%Y%m%d_%H%M%S.jpg")
+    cv2.imwrite(str(chemin), frame)
+    print(f"Capture enregistrée : {chemin}")
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +298,11 @@ def main():
             else:
                 visages = analyser_trame(frame)
 
+            ancien_etat = machine.etat
             machine.mettre_a_jour(cause_menace(visages), identites(visages))
+            # Photo AVANT les dessins : on garde l'image brute comme preuve
+            if machine.etat == "ROUGE" and ancien_etat != "ROUGE":
+                enregistrer_capture(frame)
 
             dessiner_visages(frame, visages)
             dessiner_etat(frame, machine)

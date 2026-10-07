@@ -21,3 +21,7 @@ autorises/
 docs/AVANCEMENT_IA.md
 docs/SOUTENANCE.md
 *.docx
+
+# Captures et journaux : jamais dans Git
+captures/
+journaux/

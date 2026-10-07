@@ -12,11 +12,17 @@ une IA qui détecte les menaces, sur un pipeline chiffré et durci par la cyber.
 Ce dépôt contient le **module vision** : un script Python qui analyse la webcam en temps réel
 et déclenche une alerte d'intrusion quand un visage est **inconnu**, **absent** (dos tourné)
 ou, plus tard, **caché** (masque, cagoule, écharpe, main).
+Il contient aussi le **dashboard de supervision de tout le projet** (`dashboard.py`), demandé par le groupe.
 
 Répartition dans ce module :
-- **Profil Dev (moi)** : `main.py` — pipeline vidéo, performance, machine à états, envoi réseau.
+- **Profil Dev (moi)** : `main.py` — pipeline vidéo, performance, machine à états, mock d'alerte ;
+  `dashboard.py` — supervision.
 - **Profil IA (binôme)** : `facial_recognition.py` — détection + reconnaissance faciale.
   Son guide de branchement : `docs/NOTES_POUR_DEV.md`. Banc d'essai : `test_ia.py`.
+
+**Périmètre :** la partie réseau (MQTTS, broker, certificats, validation des payloads) n'est
+**pas** la mienne : c'est un autre membre / l'équipe cyber. Ne rien ajouter qui n'est pas prévu
+par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de coder.
 
 ## Architecture retenue
 
@@ -33,6 +39,10 @@ Répartition dans ce module :
   Jamais de HTTP en clair, jamais de flux vidéo sur le réseau : seuls les états et alertes JSON sortent.
 - Les états sont publiés **à chaque changement** (pas seulement l'alerte rouge) : ils alimentent le
   score de menace unifié calculé par l'autre dev (Isolation Forest capteurs + réseau).
+- Dashboard : programme **tkinter** séparé de `main.py` (ne ralentit pas la vision). Pour l'instant
+  alimenté par `DonneesSimulees` ; les vraies données passeront par `Dashboard.recevoir(source, donnees)`.
+  Source muette > 5 s → alerte. État global = le pire de score / vision / sources muettes.
+  Journal horodaté aussi écrit dans `journaux/` (preuve pour le pentest).
 
 ## Contraintes du cahier des charges
 
@@ -63,13 +73,22 @@ Fait dans `main.py` :
   pour recharger `autorises/`.
 - `cause_menace(visages)` + `MachineEtats`. Publie `CHANGEMENT_ETAT` / `ALERTE_INTRUSION` avec
   `{etat, etat_precedent, cause, identites, duree_menace_s}`.
-- `send_alert` : mock (`print` du JSON). Au jour 3, seul le `print` devient `client.publish(...)`.
+- `send_alert` : mock (`print` du JSON). Le vrai envoi réseau sera fait par celui qui gère le réseau.
+- Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
+Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
+avec courbes, signaux de vie, indicateurs cyber (canal chiffré, payloads rejetés), journal,
+bouton « Alerte prise en compte », badge « DONNEES SIMULEES ».
+
+**Pour l'instant, uniquement des mocks** : la BDD des visages autorisés (qui remplacera le dossier
+`autorises/`) et les données de la cyber ne sont pas encore disponibles. Ne pas inventer de format
+pour la BDD ni pour les données réseau : attendre celui du groupe.
+
 À faire :
+- Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.
-- Jour 3 : vraie publication MQTTS (topic, certificat, format, et noms en clair ou non : à valider avec la cyber),
-  décommenter `paho-mqtt`, interface type « terminal de sécurité », répétition de la démo.
+- Répétition de la démo.
 
 ## Environnement
 
@@ -79,6 +98,7 @@ Fait dans `main.py` :
 - Non versionnés (à récupérer sur chaque machine) :
   - `modeles/*.onnx` : commandes `curl` dans `docs/NOTES_POUR_DEV.md`.
   - `autorises/<prénom>/*.jpg` : photos de référence (données biométriques), créées avec `python test_ia.py` puis `s`.
+  - `captures/` (photos d'intrusion), `journaux/` (journal du dashboard).
 - Le venv local a OpenCV 5.0 : ça marche (deux `WARN` dnn au démarrage, sans conséquence).
 
 ## Conventions
