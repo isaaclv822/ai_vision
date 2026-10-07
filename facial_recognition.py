@@ -41,6 +41,7 @@ DETECTION_THRESHOLD = 0.9       # Score minimal pour retenir un visage
 SIMILARITY_THRESHOLD = 0.50
 
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png")
+MAX_PHOTO_SIZE = 640            # Cote maximal d'une photo de reference (voir _downscale)
 
 # Etat du module : les deux reseaux et les empreintes sont des ressources
 # uniques et couteuses a charger. Les garder ici permet d'exposer a la partie
@@ -101,6 +102,9 @@ def reload_references():
             if image is None:
                 ignored.append(f"{path.name} (illisible)")
                 continue
+
+            # Piege : une photo de telephone est trop grande pour YuNet
+            image = _downscale(image)
 
             # Les photos n'ont pas forcement la resolution de la webcam
             _detector.setInputSize((image.shape[1], image.shape[0]))
@@ -185,6 +189,23 @@ def analyze_frame(frame):
 # ---------------------------------------------------------------------------
 # Interne
 # ---------------------------------------------------------------------------
+def _downscale(image, max_size=MAX_PHOTO_SIZE):
+    """
+    Reduit une photo dont le plus grand cote depasse max_size.
+
+    Les anchors de YuNet sont calibres pour des visages d'une certaine taille en
+    pixels : sur une photo de telephone, le visage est trop grand et sort de la
+    plage couverte, donc il n'est pas detecte (sans erreur). La webcam sort du
+    640x480, elle n'est jamais concernee.
+    """
+    height, width = image.shape[:2]
+    scale = max_size / max(height, width)
+    if scale >= 1:
+        return image
+    return cv2.resize(image, (int(width * scale), int(height * scale)),
+                      interpolation=cv2.INTER_AREA)
+
+
 def _encode(image, row):
     """Visage -> empreinte de 128 nombres. alignCrop redresse sur un 112x112."""
     return _recognizer.feature(_recognizer.alignCrop(image, row))
