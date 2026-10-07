@@ -10,23 +10,39 @@ Notre groupe (2 dev, 3 cyber) a **fusionné les volets IA et Cyber** du sujet :
 une IA qui détecte les menaces, sur un pipeline chiffré et durci par la cyber.
 
 Ce dépôt contient le **module vision** : un script Python qui analyse la webcam en temps réel
-et détecte un visage obstrué (masque, cagoule, écharpe, main) pour déclencher une alerte d'intrusion.
+et déclenche une alerte d'intrusion quand un visage est **inconnu**, **absent** (dos tourné)
+ou, plus tard, **caché** (masque, cagoule, écharpe, main).
+Il contient aussi le **dashboard de supervision de tout le projet** (`dashboard.py`), demandé par le groupe.
 
 Répartition dans ce module :
-- **Profil Dev (moi)** : pipeline vidéo, performance, machine à états, envoi réseau.
-- **Profil IA (binôme)** : détection de visage (MediaPipe) et classification masque / pas masque.
+- **Profil Dev (moi)** : `main.py` — pipeline vidéo, performance, machine à états, mock d'alerte ;
+  `dashboard.py` — supervision.
+- **Profil IA (binôme)** : `facial_recognition.py` — détection + reconnaissance faciale.
+  Son guide de branchement : `docs/NOTES_POUR_DEV.md`. Banc d'essai : `test_ia.py`.
+
+**Périmètre :** la partie réseau (MQTTS, broker, certificats, validation des payloads) n'est
+**pas** la mienne : c'est un autre membre / l'équipe cyber. Ne rien ajouter qui n'est pas prévu
+par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de coder.
 
 ## Architecture retenue
 
 - **Un seul PC = serveur + webcam intégrée.** Le script tourne directement sur la machine, **hors Docker**
   (faire voir la webcam à un conteneur est trop galère). Seul le broker Mosquitto est conteneurisé.
-- Pipeline : capture OpenCV → resize 640x480 → MediaPipe Face Detection → recadrage du visage
-  → modèle masque (MobileNetV2 Keras, ou `.tflite` / ONNX via OpenCV DNN si TensorFlow pose problème)
-  → machine à états → publication MQTTS.
+- Pipeline : capture OpenCV → resize 640x480 → détection YuNet (`cv2.FaceDetectorYN`)
+  → alignement + empreinte SFace (`cv2.FaceRecognizerSF`) → comparaison aux photos de `autorises/`
+  → machine à états → publication MQTTS. Tout est fourni par `opencv-contrib-python`, ~30 ms par trame.
+- Contrat IA : `ia.initialize()` une fois avant la boucle, puis `ia.analyze_frame(frame)` qui renvoie
+  `[{"box": (x, y, w, h), "identity": "isaac" | None, "similarity": 0.87, "obstructed": False, "confidence": 0.0}]`.
+  Liste vide = aucun visage. `obstructed` / `confidence` sont réservés (toujours inertes pour l'instant).
+  Le seuil de similarité est réglé dans `facial_recognition.py`, pas dans `main.py`.
 - **Réseau : MQTTS uniquement** (`paho-mqtt` + TLS, `localhost:8883`, certificat fourni par l'équipe cyber).
   Jamais de HTTP en clair, jamais de flux vidéo sur le réseau : seuls les états et alertes JSON sortent.
 - Les états sont publiés **à chaque changement** (pas seulement l'alerte rouge) : ils alimentent le
   score de menace unifié calculé par l'autre dev (Isolation Forest capteurs + réseau).
+- Dashboard : programme **tkinter** séparé de `main.py` (ne ralentit pas la vision). Pour l'instant
+  alimenté par `DonneesSimulees` ; les vraies données passeront par `Dashboard.recevoir(source, donnees)`.
+  Source muette > 5 s → alerte. État global = le pire de score / vision / sources muettes.
+  Journal horodaté aussi écrit dans `journaux/` (preuve pour le pentest).
 
 ## Contraintes du cahier des charges
 
@@ -35,53 +51,60 @@ Répartition dans ce module :
   l'intervalle entre trames, qui dépend surtout de la caméra (~33 ms à 30 fps).
 - Afficher la mesure en incrustation sur la vidéo pour la démo.
 
-## Machine à états (jour 2)
+## Machine à états
 
-- **VERT** : visage détecté, non obstrué. Timer à 0.
-- **ORANGE** : visage obstrué. Message « Veuillez dégager votre visage ». Timer démarré.
-- **ROUGE** : obstruction continue > 3 s. Alerte MQTTS + affichage « ALERTE INTRUSION ».
+- **VERT** : tous les visages du champ sont reconnus. Chrono à 0.
+- **ORANGE** : situation suspecte, chrono démarré. Le message dépend de la cause
+  (`aucun_visage`, `visage_inconnu`, `obstruction`).
+- **ROUGE** : menace continue > 3 s. Alerte + affichage « ALERTE INTRUSION ».
 
 Règles :
-- Timer avec `time.monotonic()`, pas en comptant les trames.
-- **Tolérance aux erreurs du modèle** : quelques trames contradictoires ne doivent pas remettre
-  le timer à zéro (hystérésis).
-- Ne déclarer « obstrué » qu'au-delà d'un seuil de confiance (~80 %, à ajuster).
-- Cas à gérer si possible : personne présente mais aucun visage visible (dos tourné) → ORANGE aussi.
+- Chrono avec `time.monotonic()`, pas en comptant les trames.
+- **Tolérance** : retour au VERT seulement après 0,5 s de situation normale (hystérésis).
+- Règle stricte : un seul visage inconnu suffit, même à côté d'une personne autorisée.
+- Obstruction prise en compte seulement si `confidence >= SEUIL_CONFIANCE` (80 %).
 
 ## État actuel
 
-Jour 1 = réflexion. Étape 1 du code faite (`test_ia.py` encore vide) — `main.py` :
-- Capture webcam (`cv2.VideoCapture(0, cv2.CAP_DSHOW)` sous Windows), resize 640x480.
-- Sonde de performance : temps de traitement (vert < 100 ms, rouge au-delà) + FPS, lissés.
-- Sortie avec `q` ou la croix de la fenêtre, libération propre de la caméra.
-- `analyser_trame(frame)` : point de branchement de l'IA, renvoie pour l'instant `[]`.
-  Format attendu : `[{"box": (x, y, w, h), "obstrue": True, "confiance": 0.92}]`.
-- `send_alert(type_alerte, details)` : mock qui affiche le JSON final
-  `{"node_id", "type", "timestamp", "details"}`. Au jour 3, seul le `print` devient `client.publish(...)`.
+Fait dans `main.py` :
+- Capture webcam (`CAP_DSHOW`), 640x480, sortie avec `q` ou la croix, libération propre de la caméra.
+- Sonde de performance lissée (traitement, FPS, détail détection / IA).
+- IA branchée : `ia.initialize()` avant la boucle, `analyser_trame` → `ia.analyze_frame`, touche `r`
+  pour recharger `autorises/`.
+- `cause_menace(visages)` + `MachineEtats`. Publie `CHANGEMENT_ETAT` / `ALERTE_INTRUSION` avec
+  `{etat, etat_precedent, cause, identites, duree_menace_s}`.
+- `send_alert` : mock (`print` du JSON). Le vrai envoi réseau sera fait par celui qui gère le réseau.
+- Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
+- `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
-Étape 2 faite — machine à états :
-- `MachineEtats` (VERT / ORANGE / ROUGE, `time.monotonic()`, retour au VERT après 0,5 s découvert)
-  et `visage_menace(visages)` (seuil de confiance, aucun visage = menace).
-- Publie `CHANGEMENT_ETAT` ou `ALERTE_INTRUSION` via `send_alert` à chaque changement.
-- `MODE_SIMULATION = True` : touches `m` (masque) et `n` (aucun visage) remplacent l'IA.
-  Passer à `False` une fois `analyser_trame` branchée.
+Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
+avec courbes, signaux de vie, indicateurs cyber (canal chiffré, payloads rejetés), journal,
+bouton « Alerte prise en compte », badge « DONNEES SIMULEES ».
+
+**Pour l'instant, uniquement des mocks** : la BDD des visages autorisés (qui remplacera le dossier
+`autorises/`) et les données de la cyber ne sont pas encore disponibles. Ne pas inventer de format
+pour la BDD ni pour les données réseau : attendre celui du groupe.
 
 À faire :
-- Jour 2 (avec le binôme IA) : intégrer MediaPipe + modèle masque dans `analyser_trame`,
-  recadrage du visage. **En attente du modèle.**
-- Jour 3 : vraie publication MQTTS (topic, certificat et format à valider avec la cyber),
-  seuils de confiance, interface type « terminal de sécurité », répétition de la démo.
+- Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
+- Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.
+- Répétition de la démo.
 
 ## Environnement
 
-- Windows, Python **3.11** dans un venv (versions plus récentes = risques avec MediaPipe/TensorFlow).
+- Windows, Python **3.11** dans un venv `.venv`.
 - `python -m venv .venv` puis `.venv\Scripts\activate`, `pip install -r requirements.txt`, `python main.py`.
-- **Piège** : MediaPipe installe `opencv-contrib-python`, en conflit avec `opencv-python`.
-  Si `cv2` plante : désinstaller les deux, réinstaller seulement `opencv-contrib-python`.
+- Ne **pas** installer `opencv-python` en plus de `opencv-contrib-python` (même module `cv2`, conflit).
+- Non versionnés (à récupérer sur chaque machine) :
+  - `modeles/*.onnx` : commandes `curl` dans `docs/NOTES_POUR_DEV.md`.
+  - `autorises/<prénom>/*.jpg` : photos de référence (données biométriques), créées avec `python test_ia.py` puis `s`.
+  - `captures/` (photos d'intrusion), `journaux/` (journal du dashboard).
+- Le venv local a OpenCV 5.0 : ça marche (deux `WARN` dnn au démarrage, sans conséquence).
 
 ## Conventions
 
-- **Git : on travaille uniquement sur la branche `main`.** Pas de branche de fonctionnalité, pas de PR.
+- **Git : une branche par fonctionnalité** (`feat/...`, comme le binôme), fusionnée ensuite dans `main`.
+  Ne pas commiter le `PERSON_NAME` local de `test_ia.py`.
 - Garder le code simple et lisible : c'est un projet étudiant présenté à l'oral.
 - Constantes de configuration en haut de `main.py`.
 - Ne pas ajouter de dépendance lourde sans vérifier l'impact sur les 100 ms.
