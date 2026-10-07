@@ -1,9 +1,9 @@
 """
 SENTINEL-X — Module Vision Intelligente
 
-Analyse la webcam en temps réel pour détecter un visage obstrué.
-Étape 2 : machine à états VERT / ORANGE / ROUGE, testable au clavier
-(l'IA n'est pas encore branchée).
+Analyse la webcam en temps réel : un visage inconnu, caché ou absent
+déclenche la machine à états VERT / ORANGE / ROUGE puis une alerte.
+L'IA (détection + reconnaissance faciale) vit dans facial_recognition.py.
 """
 
 import json
@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timezone
 
 import cv2
+
+import facial_recognition as ia
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -23,12 +25,13 @@ LISSAGE = 0.9                      # Lissage des mesures (0 = brut, proche de 1 
 NOM_FENETRE = "SENTINEL-X - Vision"
 
 # Machine à états
-DELAI_ALERTE_S = 3.0               # Obstruction continue avant de passer au ROUGE
-DELAI_RETOUR_VERT_S = 0.5          # Le visage doit rester découvert ce temps-là pour revenir au VERT
-SEUIL_CONFIANCE = 0.80             # En dessous, on ne croit pas le modèle quand il dit "obstrué"
+DELAI_ALERTE_S = 3.0               # Menace continue avant de passer au ROUGE
+DELAI_RETOUR_VERT_S = 0.5          # La situation doit rester normale ce temps-là pour revenir au VERT
+SEUIL_CONFIANCE = 0.80             # Réservé au futur modèle d'obstruction
+                                   # (le seuil de reconnaissance est réglé dans facial_recognition.py)
 
-# Simulation au clavier, en attendant le modèle IA
-MODE_SIMULATION = True             # Mettre à False quand analyser_trame() sera branchée
+# Simulation au clavier, pour tester sans webcam ni modèle
+MODE_SIMULATION = False
 
 COULEUR_VERT = (0, 200, 0)         # Couleurs OpenCV en BGR
 COULEUR_ORANGE = (0, 165, 255)
@@ -36,28 +39,35 @@ COULEUR_ROUGE = (0, 0, 255)
 COULEUR_BLANC = (255, 255, 255)
 COULEUR_NOIR = (0, 0, 0)
 
+# Message affiché au bandeau ORANGE / ROUGE selon la cause (sans accents pour OpenCV)
+MESSAGES_CAUSE = {
+    "aucun_visage": "Aucun visage detecte",
+    "visage_inconnu": "Visage non reconnu",
+    "obstruction": "Veuillez degager votre visage",
+}
+
 
 # ---------------------------------------------------------------------------
-# Intelligence artificielle (point de branchement pour le binôme IA)
+# Intelligence artificielle (module du binôme IA)
 # ---------------------------------------------------------------------------
 def analyser_trame(frame):
-    """
-    Analyse une image et renvoie la liste des visages détectés.
-
-    Format attendu :
-        [{"box": (x, y, w, h), "obstrue": True, "confiance": 0.92}]
-
-    Pour l'instant : aucun modèle, on renvoie une liste vide.
-    """
-    return []
+    """Délègue au module IA. Voir docs/NOTES_POUR_DEV.md pour le format."""
+    return ia.analyze_frame(frame)
 
 
-def simuler_visages(masque_actif, aucun_visage):
-    """Faux résultat de l'IA, piloté au clavier : un visage au centre de l'image."""
+def simuler_visages(inconnu, aucun_visage):
+    """Faux résultat de l'IA, piloté au clavier."""
     if aucun_visage:
         return []
     box = (LARGEUR // 2 - 80, HAUTEUR // 2 - 100, 160, 200)
-    return [{"box": box, "obstrue": masque_actif, "confiance": 0.95}]
+    # 0.21 et 0.88 : similarités réellement mesurées par le binôme IA
+    return [{
+        "box": box,
+        "identity": None if inconnu else "simulation",
+        "similarity": 0.21 if inconnu else 0.88,
+        "obstructed": False,
+        "confidence": 0.0,
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -80,56 +90,68 @@ def send_alert(type_alerte, details):
 # ---------------------------------------------------------------------------
 # Machine à états
 # ---------------------------------------------------------------------------
-def visage_menace(visages):
+def cause_menace(visages):
     """
-    Décide si la trame est suspecte :
-    - aucun visage visible (dos tourné, visage hors champ) -> suspect
-    - un visage obstrué avec une confiance suffisante      -> suspect
+    Décide si la trame est suspecte et pourquoi. Renvoie None si tout va bien.
+    Règle stricte : un seul visage suspect suffit, même à côté d'une personne autorisée.
     """
     if not visages:
-        return True
+        return "aucun_visage"      # Dos tourné, hors champ
     for visage in visages:
-        if visage["obstrue"] and visage["confiance"] >= SEUIL_CONFIANCE:
-            return True
-    return False
+        # Toujours faux pour l'instant : prêt pour le futur modèle d'obstruction
+        if visage["obstructed"] and visage["confidence"] >= SEUIL_CONFIANCE:
+            return "obstruction"
+        if visage["identity"] is None:
+            return "visage_inconnu"
+    return None
+
+
+def identites(visages):
+    """Noms des personnes reconnues dans le champ."""
+    return [visage["identity"] for visage in visages if visage["identity"] is not None]
 
 
 class MachineEtats:
     """
-    VERT   : visage découvert, chrono à zéro.
-    ORANGE : visage caché, chrono lancé.
-    ROUGE  : visage caché depuis plus de DELAI_ALERTE_S secondes.
+    VERT   : visage reconnu, chrono à zéro.
+    ORANGE : situation suspecte (inconnu, caché ou absent), chrono lancé.
+    ROUGE  : situation suspecte depuis plus de DELAI_ALERTE_S secondes.
     """
 
     def __init__(self):
         self.etat = "VERT"
-        self.debut_obstruction = None   # Quand le chrono a démarré
+        self.cause = None               # Dernière cause de menace vue
+        self.identites = []             # Personnes reconnues sur la dernière trame
+        self.debut_menace = None        # Quand le chrono a démarré
         self.derniere_menace = None     # Dernière trame suspecte vue
 
-    def duree_obstruction(self):
+    def duree_menace(self):
         """Durée du chrono en secondes (0 si on est au VERT)."""
-        if self.debut_obstruction is None:
+        if self.debut_menace is None:
             return 0.0
-        return time.monotonic() - self.debut_obstruction
+        return time.monotonic() - self.debut_menace
 
-    def mettre_a_jour(self, menace):
+    def mettre_a_jour(self, cause, identites):
         """Fait avancer la machine d'une trame. Envoie un message si l'état change."""
         maintenant = time.monotonic()
         ancien_etat = self.etat
+        self.identites = identites
 
-        if menace:
+        if cause is not None:
+            self.cause = cause
             self.derniere_menace = maintenant
             if self.etat == "VERT":
                 self.etat = "ORANGE"
-                self.debut_obstruction = maintenant
-            elif self.etat == "ORANGE" and self.duree_obstruction() >= DELAI_ALERTE_S:
+                self.debut_menace = maintenant
+            elif self.etat == "ORANGE" and self.duree_menace() >= DELAI_ALERTE_S:
                 self.etat = "ROUGE"
         elif self.etat != "VERT":
-            # Tolérance : quelques trames "visage OK" ne suffisent pas à tout annuler,
-            # il faut que le visage reste découvert pendant DELAI_RETOUR_VERT_S.
+            # Tolérance : quelques trames "tout va bien" ne suffisent pas à tout annuler,
+            # il faut que la situation reste normale pendant DELAI_RETOUR_VERT_S.
             if maintenant - self.derniere_menace >= DELAI_RETOUR_VERT_S:
                 self.etat = "VERT"
-                self.debut_obstruction = None
+                self.cause = None
+                self.debut_menace = None
 
         if self.etat != ancien_etat:
             self.publier_changement(ancien_etat)
@@ -139,7 +161,9 @@ class MachineEtats:
         send_alert(type_alerte, {
             "etat": self.etat,
             "etat_precedent": ancien_etat,
-            "duree_obstruction_s": round(self.duree_obstruction(), 1),
+            "cause": self.cause,
+            "identites": self.identites,
+            "duree_menace_s": round(self.duree_menace(), 1),
         })
 
 
@@ -147,25 +171,29 @@ class MachineEtats:
 # Affichage
 # ---------------------------------------------------------------------------
 def dessiner_visages(frame, visages):
-    """Encadre chaque visage : rouge s'il est obstrué, vert sinon."""
+    """Encadre chaque visage : vert s'il est autorisé, rouge sinon."""
     for visage in visages:
         x, y, w, h = visage["box"]
-        couleur = COULEUR_ROUGE if visage["obstrue"] else COULEUR_VERT
+        autorise = visage["identity"] is not None
+        couleur = COULEUR_VERT if autorise else COULEUR_ROUGE
         cv2.rectangle(frame, (x, y), (x + w, y + h), couleur, 2)
-        texte = f"{visage['confiance'] * 100:.0f} %"
-        cv2.putText(frame, texte, (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, couleur, 2)
+        texte = (f"{visage['identity']} {visage['similarity'] * 100:.0f} %"
+                 if autorise else "INCONNU")
+        cv2.putText(frame, texte, (x, max(20, y - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, couleur, 2)
 
 
 def dessiner_etat(frame, machine):
     """Bandeau en bas de l'image avec la couleur de l'état et le message."""
     if machine.etat == "VERT":
-        couleur, message = COULEUR_VERT, "ACCES AUTORISE"
+        couleur = COULEUR_VERT
+        message = "ACCES AUTORISE : " + ", ".join(machine.identites)
     elif machine.etat == "ORANGE":
         couleur = COULEUR_ORANGE
-        message = f"Veuillez degager votre visage ({machine.duree_obstruction():.1f} s)"
+        message = f"{MESSAGES_CAUSE[machine.cause]} ({machine.duree_menace():.1f} s)"
     else:
         couleur = COULEUR_ROUGE
-        message = f"ALERTE INTRUSION ({machine.duree_obstruction():.1f} s)"
+        message = f"ALERTE INTRUSION ({machine.duree_menace():.1f} s)"
 
     # OpenCV n'affiche pas les accents : messages à l'écran sans accents
     cv2.rectangle(frame, (0, HAUTEUR - 50), (LARGEUR, HAUTEUR), couleur, -1)
@@ -176,18 +204,21 @@ def dessiner_etat(frame, machine):
 
 
 def dessiner_performance(frame, traitement_ms, fps):
-    """Incruste le temps de traitement (vert si < 100 ms, rouge sinon) et le FPS."""
+    """Incruste le temps de traitement (vert si < 100 ms, rouge sinon), le FPS et le détail IA."""
     couleur = COULEUR_VERT if traitement_ms < SEUIL_TRAITEMENT_MS else COULEUR_ROUGE
     cv2.putText(frame, f"Traitement : {traitement_ms:.1f} ms", (15, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, couleur, 2)
     cv2.putText(frame, f"FPS : {fps:.1f}", (15, 55),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, COULEUR_BLANC, 2)
+    if not MODE_SIMULATION:
+        cv2.putText(frame, f"detection {ia.detection_ms:.1f} ms | IA {ia.recognition_ms:.1f} ms",
+                    (15, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.45, COULEUR_BLANC, 1)
 
 
-def dessiner_aide_simulation(frame, masque_actif, aucun_visage):
+def dessiner_aide_simulation(frame, inconnu, aucun_visage):
     """Rappel des touches du simulateur, en haut à droite."""
     lignes = [
-        f"[m] masque : {'OUI' if masque_actif else 'non'}",
+        f"[i] inconnu : {'OUI' if inconnu else 'non'}",
         f"[n] aucun visage : {'OUI' if aucun_visage else 'non'}",
     ]
     for i, ligne in enumerate(lignes):
@@ -206,6 +237,11 @@ def lisser(ancienne, nouvelle):
 # Programme principal
 # ---------------------------------------------------------------------------
 def main():
+    # Chargement de l'IA AVANT la boucle (~0,4 s) : sinon la première trame
+    # mesurerait ~400 ms et l'incrustation passerait au rouge pendant la démo.
+    if not MODE_SIMULATION:
+        print(ia.initialize())
+
     # CAP_DSHOW : backend Windows, ouverture de la webcam beaucoup plus rapide
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -217,7 +253,7 @@ def main():
     cv2.namedWindow(NOM_FENETRE)
 
     machine = MachineEtats()
-    masque_actif = False    # Simulation : touche 'm'
+    inconnu = False         # Simulation : touche 'i'
     aucun_visage = False    # Simulation : touche 'n'
 
     traitement_ms = None
@@ -226,7 +262,9 @@ def main():
 
     print("SENTINEL-X démarré. Appuyez sur 'q' pour quitter.")
     if MODE_SIMULATION:
-        print("Mode simulation : 'm' = masque, 'n' = aucun visage.")
+        print("Mode simulation : 'i' = inconnu, 'n' = aucun visage.")
+    else:
+        print("Touche 'r' : recharger les visages autorisés.")
 
     try:
         while True:
@@ -242,12 +280,13 @@ def main():
             if frame.shape[1] != LARGEUR or frame.shape[0] != HAUTEUR:
                 frame = cv2.resize(frame, (LARGEUR, HAUTEUR))
 
+            # Analyse AVANT tout dessin : l'IA lit les pixels du visage
             if MODE_SIMULATION:
-                visages = simuler_visages(masque_actif, aucun_visage)
+                visages = simuler_visages(inconnu, aucun_visage)
             else:
                 visages = analyser_trame(frame)
 
-            machine.mettre_a_jour(visage_menace(visages))
+            machine.mettre_a_jour(cause_menace(visages), identites(visages))
 
             dessiner_visages(frame, visages)
             dessiner_etat(frame, machine)
@@ -264,15 +303,17 @@ def main():
 
             dessiner_performance(frame, traitement_ms, fps or 0)
             if MODE_SIMULATION:
-                dessiner_aide_simulation(frame, masque_actif, aucun_visage)
+                dessiner_aide_simulation(frame, inconnu, aucun_visage)
             cv2.imshow(NOM_FENETRE, frame)
 
-            # Clavier : 'q' pour quitter, 'm' et 'n' pour la simulation
+            # Clavier : 'q' pour quitter, 'r' pour recharger, 'i' et 'n' pour la simulation
             touche = cv2.waitKey(1) & 0xFF
             if touche == ord("q"):
                 break
-            if MODE_SIMULATION and touche == ord("m"):
-                masque_actif = not masque_actif
+            if not MODE_SIMULATION and touche == ord("r"):
+                print(ia.reload_references())
+            if MODE_SIMULATION and touche == ord("i"):
+                inconnu = not inconnu
             if MODE_SIMULATION and touche == ord("n"):
                 aucun_visage = not aucun_visage
 
