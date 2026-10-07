@@ -14,6 +14,7 @@ from pathlib import Path
 import cv2
 
 import facial_recognition as ia
+from base_donnees import BaseDonnees
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -33,6 +34,10 @@ SEUIL_CONFIANCE = 0.80             # Réservé au futur modèle d'obstruction
 
 # Simulation au clavier, pour tester sans webcam ni modèle
 MODE_SIMULATION = False
+
+# État envoyé régulièrement même sans changement : sinon le dashboard croirait
+# la vision tombée (il déclare une source muette après 5 s de silence)
+PERIODE_ETAT_S = 2.0
 
 # Photo enregistrée au passage en ROUGE : reste sur ce PC, ne part jamais sur le réseau
 DOSSIER_CAPTURES = Path(__file__).parent / "captures"
@@ -97,6 +102,7 @@ def enregistrer_capture(frame):
     chemin = DOSSIER_CAPTURES / time.strftime("intrusion_%Y%m%d_%H%M%S.jpg")
     cv2.imwrite(str(chemin), frame)
     print(f"Capture enregistrée : {chemin}")
+    return chemin
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +136,16 @@ class MachineEtats:
     ROUGE  : situation suspecte depuis plus de DELAI_ALERTE_S secondes.
     """
 
-    def __init__(self):
+    def __init__(self, base=None):
+        self.base = base                # Historique des changements d'état (optionnel)
+        self.dernier_evenement_id = None
         self.etat = "VERT"
         self.cause = None               # Dernière cause de menace vue
         self.identites = []             # Personnes reconnues sur la dernière trame
         self.debut_menace = None        # Quand le chrono a démarré
         self.derniere_menace = None     # Dernière trame suspecte vue
+        self.similarite = None          # Du visage le plus proche, sur la dernière trame
+        self.traitement_ms = 0.0        # Temps de traitement lissé
 
     def duree_menace(self):
         """Durée du chrono en secondes (0 si on est au VERT)."""
@@ -143,11 +153,13 @@ class MachineEtats:
             return 0.0
         return time.monotonic() - self.debut_menace
 
-    def mettre_a_jour(self, cause, identites):
+    def mettre_a_jour(self, cause, identites, similarite, traitement_ms):
         """Fait avancer la machine d'une trame. Envoie un message si l'état change."""
         maintenant = time.monotonic()
         ancien_etat = self.etat
         self.identites = identites
+        self.similarite = similarite
+        self.traitement_ms = traitement_ms
 
         if cause is not None:
             self.cause = cause
@@ -168,15 +180,28 @@ class MachineEtats:
         if self.etat != ancien_etat:
             self.publier_changement(ancien_etat)
 
-    def publier_changement(self, ancien_etat):
-        type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
-        send_alert(type_alerte, {
+    def details(self):
+        """Contenu commun à tous les messages de la vision (lu tel quel par le dashboard)."""
+        return {
             "etat": self.etat,
-            "etat_precedent": ancien_etat,
             "cause": self.cause,
             "identites": self.identites,
+            "similarite": None if self.similarite is None else round(self.similarite, 2),
+            "traitement_ms": round(self.traitement_ms, 1),
             "duree_menace_s": round(self.duree_menace(), 1),
-        })
+        }
+
+    def publier_changement(self, ancien_etat):
+        type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
+        details = {**self.details(), "etat_precedent": ancien_etat}
+        send_alert(type_alerte, details)
+        # Seuls les changements vont en base : l'état périodique n'y apporterait que du bruit
+        if self.base is not None:
+            self.dernier_evenement_id = self.base.enregistrer_evenement("vision", type_alerte, details)
+
+    def publier_etat_periodique(self):
+        """Compte rendu régulier, distinct d'un changement : prouve que la vision tourne."""
+        send_alert("ETAT_PERIODIQUE", self.details())
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +289,14 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HAUTEUR)
     cv2.namedWindow(NOM_FENETRE)
 
-    machine = MachineEtats()
+    base = BaseDonnees()
+    machine = MachineEtats(base)
     inconnu = False         # Simulation : touche 'i'
     aucun_visage = False    # Simulation : touche 'n'
 
     traitement_ms = None
     fps = None
+    dernier_etat_periodique = time.monotonic()
     instant_precedent = time.perf_counter()
 
     print("SENTINEL-X démarré. Appuyez sur 'q' pour quitter.")
@@ -299,10 +326,15 @@ def main():
                 visages = analyser_trame(frame)
 
             ancien_etat = machine.etat
-            machine.mettre_a_jour(cause_menace(visages), identites(visages))
+            # Visages triés par taille : le premier est le plus proche de la caméra
+            similarite = visages[0]["similarity"] if visages else None
+            machine.mettre_a_jour(cause_menace(visages), identites(visages),
+                                  similarite, traitement_ms or 0.0)
             # Photo AVANT les dessins : on garde l'image brute comme preuve
             if machine.etat == "ROUGE" and ancien_etat != "ROUGE":
-                enregistrer_capture(frame)
+                chemin = enregistrer_capture(frame)
+                # Relie la photo à l'alerte ROUGE qui vient d'être enregistrée
+                base.enregistrer_capture(chemin, machine.dernier_evenement_id)
 
             dessiner_visages(frame, visages)
             dessiner_etat(frame, machine)
@@ -316,6 +348,10 @@ def main():
             instant_precedent = fin
             if intervalle > 0:
                 fps = lisser(fps, 1 / intervalle)
+
+            if time.monotonic() - dernier_etat_periodique >= PERIODE_ETAT_S:
+                machine.publier_etat_periodique()
+                dernier_etat_periodique = time.monotonic()
 
             dessiner_performance(frame, traitement_ms, fps or 0)
             if MODE_SIMULATION:
@@ -339,6 +375,7 @@ def main():
     finally:
         # Toujours libérer la caméra, même en cas d'erreur
         cap.release()
+        base.fermer()
         cv2.destroyAllWindows()
         print("SENTINEL-X arrêté proprement.")
 

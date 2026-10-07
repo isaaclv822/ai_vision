@@ -16,7 +16,7 @@ Il contient aussi le **dashboard de supervision de tout le projet** (`dashboard.
 
 Répartition dans ce module :
 - **Profil Dev (moi)** : `main.py` — pipeline vidéo, performance, machine à états, mock d'alerte ;
-  `dashboard.py` — supervision.
+  `dashboard.py` — supervision ; `base_donnees.py` — BDD SQLite (tests : `test_base_donnees.py`).
 - **Profil IA (binôme)** : `facial_recognition.py` — détection + reconnaissance faciale.
   Son guide de branchement : `docs/NOTES_POUR_DEV.md`. Banc d'essai : `test_ia.py`.
 
@@ -71,21 +71,35 @@ Fait dans `main.py` :
 - Sonde de performance lissée (traitement, FPS, détail détection / IA).
 - IA branchée : `ia.initialize()` avant la boucle, `analyser_trame` → `ia.analyze_frame`, touche `r`
   pour recharger `autorises/`.
-- `cause_menace(visages)` + `MachineEtats`. Publie `CHANGEMENT_ETAT` / `ALERTE_INTRUSION` avec
-  `{etat, etat_precedent, cause, identites, duree_menace_s}`.
+- `cause_menace(visages)` + `MachineEtats`. Publie `CHANGEMENT_ETAT` / `ALERTE_INTRUSION` à chaque
+  changement, et `ETAT_PERIODIQUE` toutes les 2 s (sinon le dashboard déclarerait la vision muette).
+  `details` = `{etat, cause, identites, similarite, traitement_ms, duree_menace_s}` (+ `etat_precedent`
+  pour un changement). Le dashboard reçoit ce `details` tel quel, pas l'enveloppe.
+  Prévenir l'autre dev : le trafic vision est périodique (base de référence de son Isolation Forest).
 - `send_alert` : mock (`print` du JSON). Le vrai envoi réseau sera fait par celui qui gère le réseau.
 - Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
+- BDD branchée : chaque changement d'état va dans `evenements` (pas l'état périodique), la capture
+  est reliée à l'alerte ROUGE (`MachineEtats.dernier_evenement_id`). ~1 ms par écriture.
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
 Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
 avec courbes, signaux de vie, indicateurs cyber (canal chiffré, payloads rejetés), journal,
 bouton « Alerte prise en compte », badge « DONNEES SIMULEES ».
 
-**Pour l'instant, uniquement des mocks** : la BDD des visages autorisés (qui remplacera le dossier
-`autorises/`) et les données de la cyber ne sont pas encore disponibles. Ne pas inventer de format
-pour la BDD ni pour les données réseau : attendre celui du groupe.
+Fait dans `base_donnees.py` (SQLite, `donnees/sentinelx.db`, non versionné, mode WAL) :
+- Tables `personnes` (prénom, actif, révocation), `empreintes` (une ligne **par photo**, 128 float32,
+  colonne `modele`), `evenements` (details en JSON), `captures` (chemin du JPEG, lié à l'événement).
+- On stocke l'empreinte SFace, **jamais la photo du visage**. Requêtes paramétrées partout.
+- `charger_empreintes()` → `[(prenom, empreinte (1, 128))]`, personnes actives et modèle courant
+  uniquement : c'est ce que le binôme appellera dans `reload_references()` (son fichier, pas le mien).
+- Tests : `python -m unittest test_base_donnees -v`.
+
+Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur des mocks.
+Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :
+- Donner `charger_empreintes()` au binôme pour `reload_references()`.
+- Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.
 - Répétition de la démo.
@@ -98,7 +112,7 @@ pour la BDD ni pour les données réseau : attendre celui du groupe.
 - Non versionnés (à récupérer sur chaque machine) :
   - `modeles/*.onnx` : commandes `curl` dans `docs/NOTES_POUR_DEV.md`.
   - `autorises/<prénom>/*.jpg` : photos de référence (données biométriques), créées avec `python test_ia.py` puis `s`.
-  - `captures/` (photos d'intrusion), `journaux/` (journal du dashboard).
+  - `captures/` (photos d'intrusion), `journaux/` (journal du dashboard), `donnees/` (base SQLite).
 - Le venv local a OpenCV 5.0 : ça marche (deux `WARN` dnn au démarrage, sans conséquence).
 
 ## Conventions

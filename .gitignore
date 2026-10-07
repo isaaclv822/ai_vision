@@ -25,3 +25,6 @@ docs/SOUTENANCE.md
 # Captures et journaux : jamais dans Git
 captures/
 journaux/
+
+# Base SQLite (empreintes = données biométriques) : jamais dans Git
+donnees/
