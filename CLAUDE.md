@@ -78,6 +78,8 @@ Fait dans `main.py` :
   Prévenir l'autre dev : le trafic vision est périodique (base de référence de son Isolation Forest).
 - `send_alert` : mock (`print` du JSON). Le vrai envoi réseau sera fait par celui qui gère le réseau.
 - Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
+- BDD branchée : chaque changement d'état va dans `evenements` (pas l'état périodique), la capture
+  est reliée à l'alerte ROUGE (`MachineEtats.dernier_evenement_id`). ~1 ms par écriture.
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
 Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
@@ -96,7 +98,7 @@ Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur
 Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :
-- Brancher la BDD dans `main.py` (événements + captures) et donner `charger_empreintes()` au binôme.
+- Donner `charger_empreintes()` au binôme pour `reload_references()`.
 - Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.

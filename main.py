@@ -14,6 +14,7 @@ from pathlib import Path
 import cv2
 
 import facial_recognition as ia
+from base_donnees import BaseDonnees
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -101,6 +102,7 @@ def enregistrer_capture(frame):
     chemin = DOSSIER_CAPTURES / time.strftime("intrusion_%Y%m%d_%H%M%S.jpg")
     cv2.imwrite(str(chemin), frame)
     print(f"Capture enregistrée : {chemin}")
+    return chemin
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +136,9 @@ class MachineEtats:
     ROUGE  : situation suspecte depuis plus de DELAI_ALERTE_S secondes.
     """
 
-    def __init__(self):
+    def __init__(self, base=None):
+        self.base = base                # Historique des changements d'état (optionnel)
+        self.dernier_evenement_id = None
         self.etat = "VERT"
         self.cause = None               # Dernière cause de menace vue
         self.identites = []             # Personnes reconnues sur la dernière trame
@@ -189,7 +193,11 @@ class MachineEtats:
 
     def publier_changement(self, ancien_etat):
         type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
-        send_alert(type_alerte, {**self.details(), "etat_precedent": ancien_etat})
+        details = {**self.details(), "etat_precedent": ancien_etat}
+        send_alert(type_alerte, details)
+        # Seuls les changements vont en base : l'état périodique n'y apporterait que du bruit
+        if self.base is not None:
+            self.dernier_evenement_id = self.base.enregistrer_evenement("vision", type_alerte, details)
 
     def publier_etat_periodique(self):
         """Compte rendu régulier, distinct d'un changement : prouve que la vision tourne."""
@@ -281,7 +289,8 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HAUTEUR)
     cv2.namedWindow(NOM_FENETRE)
 
-    machine = MachineEtats()
+    base = BaseDonnees()
+    machine = MachineEtats(base)
     inconnu = False         # Simulation : touche 'i'
     aucun_visage = False    # Simulation : touche 'n'
 
@@ -323,7 +332,9 @@ def main():
                                   similarite, traitement_ms or 0.0)
             # Photo AVANT les dessins : on garde l'image brute comme preuve
             if machine.etat == "ROUGE" and ancien_etat != "ROUGE":
-                enregistrer_capture(frame)
+                chemin = enregistrer_capture(frame)
+                # Relie la photo à l'alerte ROUGE qui vient d'être enregistrée
+                base.enregistrer_capture(chemin, machine.dernier_evenement_id)
 
             dessiner_visages(frame, visages)
             dessiner_etat(frame, machine)
@@ -364,6 +375,7 @@ def main():
     finally:
         # Toujours libérer la caméra, même en cas d'erreur
         cap.release()
+        base.fermer()
         cv2.destroyAllWindows()
         print("SENTINEL-X arrêté proprement.")
 
