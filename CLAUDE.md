@@ -40,8 +40,12 @@ par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de co
   Jamais de HTTP en clair, jamais de flux vidéo sur le réseau : seuls les états et alertes JSON sortent.
 - Les états sont publiés **à chaque changement** (pas seulement l'alerte rouge) : ils alimentent le
   score de menace unifié calculé par l'autre dev (Isolation Forest capteurs + réseau).
-- Dashboard : programme **tkinter** séparé de `main.py` (ne ralentit pas la vision). Pour l'instant
-  alimenté par `DonneesSimulees` ; les vraies données passeront par `Dashboard.recevoir(source, donnees)`.
+- Dashboard : programme **tkinter** séparé de `main.py` (ne ralentit pas la vision). **Vision réelle**
+  via la BDD : `main.py` écrit son `details` dans la table `etat_courant` (une ligne par source, écrasée
+  à chaque changement et toutes les 2 s) ; le dashboard la relit toutes les 500 ms (`lire_bdd`) et ne
+  transmet un état que s'il est nouveau et a moins de 5 s (un vieil état d'une session arrêtée est
+  ignoré). Capteurs, réseau, score, cyber : encore `DonneesSimulees`. Point de branchement commun :
+  `Dashboard.recevoir(source, donnees)`.
   Source muette > 5 s → alerte. État global = le pire de score / vision / sources muettes.
   Journal horodaté aussi écrit dans `journaux/` (preuve pour le pentest).
 
@@ -108,17 +112,18 @@ Fait dans `main.py` :
 
 Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
 avec courbes, signaux de vie, indicateurs cyber (canal chiffré, payloads rejetés), journal,
-bouton « Alerte prise en compte », badge « DONNEES SIMULEES ».
+bouton « Alerte prise en compte », badge « VISION REELLE | CAPTEURS, RESEAU, CYBER SIMULES ».
 
 Fait dans `base_donnees.py` (SQLite, `donnees/sentinelx.db`, non versionné, mode WAL) :
 - Tables `personnes` (prénom, actif, révocation), `empreintes` (une ligne **par photo**, 128 float32,
-  colonne `modele`), `evenements` (details en JSON), `captures` (chemin du JPEG, lié à l'événement).
+  colonne `modele`), `evenements` (details en JSON), `captures` (chemin du JPEG, lié à l'événement),
+  `etat_courant` (dernier état de chaque source, lu par le dashboard).
 - On stocke l'empreinte SFace, **jamais la photo du visage**. Requêtes paramétrées partout.
 - `charger_empreintes()` → `[(prenom, empreinte (1, 128))]`, personnes actives et modèle courant
   uniquement : c'est ce que le binôme appellera dans `reload_references()` (son fichier, pas le mien).
 - Tests : `python -m unittest test_base_donnees -v`.
 
-Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur des mocks.
+Les données de la cyber ne sont pas encore disponibles : capteurs / réseau / score / cyber restent simulés.
 Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :

@@ -72,6 +72,14 @@ CREATE TABLE IF NOT EXISTS captures (
     chemin        TEXT NOT NULL,
     horodatage    TEXT NOT NULL
 );
+
+-- Dernier état connu de chaque source : UNE ligne par source, écrasée à chaque
+-- mise à jour (la table ne grossit pas). Le dashboard la relit en continu.
+CREATE TABLE IF NOT EXISTS etat_courant (
+    source      TEXT PRIMARY KEY,
+    horodatage  TEXT NOT NULL,
+    details     TEXT NOT NULL       -- JSON
+);
 """
 
 
@@ -197,3 +205,21 @@ class BaseDonnees:
             evenement["details"] = json.loads(evenement["details"]) if evenement["details"] else {}
             evenements.append(evenement)
         return evenements
+
+    # --- État courant (lu par le dashboard) -----------------------------------
+    def mettre_a_jour_etat_courant(self, source, details):
+        """Écrase le dernier état connu de la source (une seule ligne par source)."""
+        with self.connexion:
+            self.connexion.execute(
+                "INSERT INTO etat_courant (source, horodatage, details) VALUES (?, ?, ?) "
+                "ON CONFLICT(source) DO UPDATE SET horodatage = excluded.horodatage, "
+                "details = excluded.details",
+                (source, maintenant(), json.dumps(details, ensure_ascii=False)))
+
+    def lire_etat_courant(self, source):
+        """Renvoie (horodatage, details) du dernier état de la source, ou None."""
+        ligne = self.connexion.execute(
+            "SELECT horodatage, details FROM etat_courant WHERE source = ?", (source,)).fetchone()
+        if ligne is None:
+            return None
+        return ligne["horodatage"], json.loads(ligne["details"])

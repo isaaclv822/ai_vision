@@ -240,13 +240,18 @@ class MachineEtats:
         type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
         details = {**self.details(), "etat_precedent": ancien_etat}
         send_alert(type_alerte, details)
-        # Seuls les changements vont en base : l'état périodique n'y apporterait que du bruit
+        # Seuls les changements vont dans l'historique : l'état périodique n'y apporterait que du bruit
         if self.base is not None:
             self.dernier_evenement_id = self.base.enregistrer_evenement("vision", type_alerte, details)
+            self.base.mettre_a_jour_etat_courant("vision", details)
 
     def publier_etat_periodique(self):
         """Compte rendu régulier, distinct d'un changement : prouve que la vision tourne."""
-        send_alert("ETAT_PERIODIQUE", self.details())
+        details = self.details()
+        send_alert("ETAT_PERIODIQUE", details)
+        # Le dashboard lit cette ligne : si elle n'est plus rafraîchie, la vision est tombée
+        if self.base is not None:
+            self.base.mettre_a_jour_etat_courant("vision", details)
 
 
 # ---------------------------------------------------------------------------

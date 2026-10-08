@@ -108,6 +108,17 @@ class TestBaseDonnees(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):              # Clés étrangères actives
             self.base.enregistrer_capture("captures/x.jpg", evenement_id=999)
 
+    # --- État courant (lu par le dashboard) -------------------------------------
+    def test_etat_courant_une_seule_ligne_par_source(self):
+        self.assertIsNone(self.base.lire_etat_courant("vision"))
+        self.base.mettre_a_jour_etat_courant("vision", {"etat": "VERT", "identites": ["joakim"]})
+        self.base.mettre_a_jour_etat_courant("vision", {"etat": "ORANGE", "identites": []})
+        horodatage, details = self.base.lire_etat_courant("vision")
+        self.assertEqual(details, {"etat": "ORANGE", "identites": []})   # Le dernier écrase
+        self.assertTrue(horodatage.endswith("+00:00"))                    # UTC
+        nb_lignes = self.base.connexion.execute("SELECT COUNT(*) FROM etat_courant").fetchone()[0]
+        self.assertEqual(nb_lignes, 1)                                    # La table ne grossit pas
+
     # --- Compatibilité avec SFace ---------------------------------------------
     @unittest.skipUnless(MODELE_SFACE.exists(), "modèle SFace absent")
     def test_empreinte_relue_compatible_avec_sface(self):
