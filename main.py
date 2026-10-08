@@ -19,6 +19,7 @@ import cv2
 
 import facial_recognition as ia
 from base_donnees import BaseDonnees
+from reseau import ClientAPI
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -46,8 +47,12 @@ MODE_SIMULATION = False
 # la vision tombée (il déclare une source muette après 5 s de silence)
 PERIODE_ETAT_S = 2.0
 
-# Photo enregistrée au passage en ROUGE : reste sur ce PC, ne part jamais sur le réseau
-DOSSIER_CAPTURES = Path(__file__).parent / "captures"
+# Photo d'intrusion (passage ROUGE) : encodée en mémoire et envoyée au Kali,
+# JAMAIS écrite sur le disque local (une photo par intrusion, en HTTPS ; aucun flux vidéo).
+# Seules les empreintes (vecteurs) restent en local, dans le SQLite.
+
+# Client HTTPS vers l'API du serveur Kali (créé dans main())
+CLIENT_API = None
 
 # Inscription d'une personne (uniquement avec : python main.py --inscription)
 NB_PHOTOS_INSCRIPTION = 5          # Une empreinte par photo : plusieurs poses = reconnaissance plus fiable
@@ -111,25 +116,20 @@ def simuler_visages(inconnu, aucun_visage):
 # ---------------------------------------------------------------------------
 def send_alert(type_alerte, details):
     """
-    Construit le message JSON envoyé au reste du système.
-    Jour 3 : seul le print sera remplacé par client.publish(...) en MQTTS.
+    Construit le message JSON envoyé au reste du système, l'affiche, et le
+    confie au client HTTPS (envoi en arrière-plan vers l'API du serveur Kali).
     """
     message = {
         "node_id": NODE_ID,
+        "source": "vision",
         "type": type_alerte,
+        "label": details.get("etat"),      # Colonne "label" de l'API : VERT / ORANGE / ROUGE
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "details": details,
     }
     print(json.dumps(message, ensure_ascii=False))
-
-
-def enregistrer_capture(frame):
-    """Photo locale au passage en ROUGE : la preuve de l'intrusion."""
-    DOSSIER_CAPTURES.mkdir(exist_ok=True)
-    chemin = DOSSIER_CAPTURES / time.strftime("intrusion_%Y%m%d_%H%M%S.jpg")
-    cv2.imwrite(str(chemin), frame)
-    print(f"Capture enregistrée : {chemin}")
-    return chemin
+    if CLIENT_API is not None:
+        CLIENT_API.envoyer_alerte(message)
 
 
 # ---------------------------------------------------------------------------
@@ -239,19 +239,13 @@ class MachineEtats:
     def publier_changement(self, ancien_etat):
         type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
         details = {**self.details(), "etat_precedent": ancien_etat}
+        # Envoi au Kali uniquement : aucun événement n'est stocké en local.
+        # L'historique (et le lien photo<->alerte) est tenu côté serveur par l'API.
         send_alert(type_alerte, details)
-        # Seuls les changements vont dans l'historique : l'état périodique n'y apporterait que du bruit
-        if self.base is not None:
-            self.dernier_evenement_id = self.base.enregistrer_evenement("vision", type_alerte, details)
-            self.base.mettre_a_jour_etat_courant("vision", details)
 
     def publier_etat_periodique(self):
         """Compte rendu régulier, distinct d'un changement : prouve que la vision tourne."""
-        details = self.details()
-        send_alert("ETAT_PERIODIQUE", details)
-        # Le dashboard lit cette ligne : si elle n'est plus rafraîchie, la vision est tombée
-        if self.base is not None:
-            self.base.mettre_a_jour_etat_courant("vision", details)
+        send_alert("ETAT_PERIODIQUE", self.details())
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +490,7 @@ def augmenter_priorite():
 
 
 def main():
+    global CLIENT_API
     parser = argparse.ArgumentParser(description="SENTINEL-X - module vision")
     parser.add_argument("--inscription", action="store_true",
                         help="autorise l'inscription de nouvelles personnes (touche e)")
@@ -506,6 +501,7 @@ def main():
     inscription_possible = args.inscription and not MODE_SIMULATION
 
     augmenter_priorite()
+    CLIENT_API = ClientAPI()
     # Chargement de l'IA AVANT la boucle (~0,4 s) : sinon la première trame
     # mesurerait ~400 ms et l'incrustation passerait au rouge pendant la démo.
     base = BaseDonnees()
@@ -567,8 +563,6 @@ def main():
                 # déclencher une alerte d'intrusion pendant sa propre inscription
                 inscription.traiter(frame, visages)
                 if inscription.termine():
-                    base.enregistrer_evenement("vision", "INSCRIPTION", {
-                        "prenom": inscription.prenom, "nb_photos": inscription.nb_photos})
                     print(f"Inscription de {inscription.prenom} terminée.")
                     charger_autorises(base)
                     inscription = None
@@ -579,11 +573,13 @@ def main():
                 similarite = visages[0]["similarity"] if visages else None
                 machine.mettre_a_jour(cause_menace(visages), identites(visages),
                                       similarite, traitement_ms or 0.0)
-                # Photo AVANT les dessins : on garde l'image brute comme preuve
+                # Photo AVANT les dessins : l'image brute est la preuve d'intrusion.
+                # Encodée en mémoire et envoyée au Kali, rattachée à l'alerte ROUGE ;
+                # aucune copie n'est écrite sur ce PC.
                 if machine.etat == "ROUGE" and ancien_etat != "ROUGE":
-                    chemin = enregistrer_capture(frame)
-                    # Relie la photo à l'alerte ROUGE qui vient d'être enregistrée
-                    base.enregistrer_capture(chemin, machine.dernier_evenement_id)
+                    ok_jpeg, tampon = cv2.imencode(".jpg", frame)
+                    if ok_jpeg:
+                        CLIENT_API.envoyer_capture(tampon.tobytes())
 
             dessiner_visages(frame, visages)
             if inscription is not None:
