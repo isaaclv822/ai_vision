@@ -28,3 +28,6 @@ journaux/
 
 # Base SQLite (empreintes = données biométriques) : jamais dans Git
 donnees/
+
+# Notes de travail locales (Claude Code) : pas dans le dépôt
+CLAUDE.md
