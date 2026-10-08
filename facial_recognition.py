@@ -193,10 +193,13 @@ def _downscale(image, max_size=MAX_PHOTO_SIZE):
     """
     Reduit une photo dont le plus grand cote depasse max_size.
 
-    Les anchors de YuNet sont calibres pour des visages d'une certaine taille en
-    pixels : sur une photo de telephone, le visage est trop grand et sort de la
-    plage couverte, donc il n'est pas detecte (sans erreur). La webcam sort du
-    640x480, elle n'est jamais concernee.
+    YuNet est entraine pour des visages d'environ 10x10 a 300x300 px. Au-dela,
+    il trouve toujours le visage mais son score s'effondre : mesure sur nos
+    photos, 0.94 pour un visage de 216 px, 0.89 a 375 px, 0.68 a 885 px. Le
+    visage se fait donc rejeter par DETECTION_THRESHOLD, pas par le detecteur.
+    Reduire l'image le ramene dans la plage ou YuNet est sur de lui.
+
+    La webcam sort du 640x480 : elle n'est jamais concernee.
     """
     height, width = image.shape[:2]
     scale = max_size / max(height, width)
