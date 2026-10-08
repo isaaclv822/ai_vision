@@ -6,8 +6,11 @@ déclenche la machine à états VERT / ORANGE / ROUGE puis une alerte.
 L'IA (détection + reconnaissance faciale) vit dans facial_recognition.py.
 """
 
+import ctypes
 import json
+import sys
 import time
+from ctypes import wintypes
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,6 +44,11 @@ PERIODE_ETAT_S = 2.0
 
 # Photo enregistrée au passage en ROUGE : reste sur ce PC, ne part jamais sur le réseau
 DOSSIER_CAPTURES = Path(__file__).parent / "captures"
+
+# Priorité Windows "au-dessus de la normale" : sur un PC chargé, le pire temps de
+# traitement passe de ~226 ms à ~61 ms (mesure du binôme IA). Pas "haute" ni
+# "temps réel" : elles pourraient bloquer le reste du système.
+PRIORITE_AU_DESSUS_NORMALE = True
 
 COULEUR_VERT = (0, 200, 0)         # Couleurs OpenCV en BGR
 COULEUR_ORANGE = (0, 165, 255)
@@ -273,7 +281,23 @@ def lisser(ancienne, nouvelle):
 # ---------------------------------------------------------------------------
 # Programme principal
 # ---------------------------------------------------------------------------
+def augmenter_priorite():
+    """Passe ce processus en priorité "au-dessus de la normale" (Windows uniquement)."""
+    if not PRIORITE_AU_DESSUS_NORMALE or sys.platform != "win32":
+        return
+    ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+    kernel32 = ctypes.windll.kernel32
+    # Types à déclarer : sinon ctypes tronque la poignée du processus en 32 bits
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    if kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS):
+        print("Priorité du processus : au-dessus de la normale.")
+    else:
+        print("Impossible de changer la priorité : on continue en priorité normale.")
+
+
 def main():
+    augmenter_priorite()
     # Chargement de l'IA AVANT la boucle (~0,4 s) : sinon la première trame
     # mesurerait ~400 ms et l'incrustation passerait au rouge pendant la démo.
     if not MODE_SIMULATION:
