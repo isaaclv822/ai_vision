@@ -86,6 +86,12 @@ Fait dans `main.py` :
 - Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
 - BDD branchée : chaque changement d'état va dans `evenements` (pas l'état périodique), la capture
   est reliée à l'alerte ROUGE (`MachineEtats.dernier_evenement_id`). ~1 ms par écriture.
+- **Inscription** : `python main.py --inscription` (seul mode où la touche `e` existe : un intrus ne
+  peut pas s'inscrire en surveillance normale). `e` → prénom saisi dans le terminal (vidéo figée) →
+  5 photos auto (un seul visage, toutes les 0,7 s, consignes de pose) → une empreinte par photo dans la
+  BDD → `ia.reload_references()`. Surveillance suspendue pendant le scan, événement `INSCRIPTION` en base.
+  Personne révoquée refusée. **Dépend du binôme** : `ia.compute_embedding(frame)` → (1, 128) ou None,
+  et `reload_references()` qui lit `charger_empreintes()`. Sans `compute_embedding`, le mode se désactive.
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
 Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
@@ -104,7 +110,8 @@ Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur
 Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :
-- Donner `charger_empreintes()` au binôme pour `reload_references()`.
+- Binôme : ajouter `ia.compute_embedding(frame)` et faire lire la BDD à `reload_references()`
+  (message envoyé). Puis réinscrire les personnes (ou importer les photos de `autorises/`).
 - Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.

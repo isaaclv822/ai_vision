@@ -6,6 +6,7 @@ déclenche la machine à états VERT / ORANGE / ROUGE puis une alerte.
 L'IA (détection + reconnaissance faciale) vit dans facial_recognition.py.
 """
 
+import argparse
 import ctypes
 import json
 import sys
@@ -45,6 +46,17 @@ PERIODE_ETAT_S = 2.0
 # Photo enregistrée au passage en ROUGE : reste sur ce PC, ne part jamais sur le réseau
 DOSSIER_CAPTURES = Path(__file__).parent / "captures"
 
+# Inscription d'une personne (uniquement avec : python main.py --inscription)
+NB_PHOTOS_INSCRIPTION = 5          # Une empreinte par photo : plusieurs poses = reconnaissance plus fiable
+INTERVALLE_PHOTOS_S = 0.7          # Laisse le temps de changer de pose entre deux photos
+CONSIGNES_INSCRIPTION = [          # Sans accents : affichées par OpenCV
+    "Regardez la camera",
+    "Tournez legerement la tete a gauche",
+    "Tournez legerement la tete a droite",
+    "Levez legerement le menton",
+    "Baissez legerement le menton",
+]
+
 # Priorité Windows "au-dessus de la normale" : sur un PC chargé, le pire temps de
 # traitement passe de ~226 ms à ~61 ms (mesure du binôme IA). Pas "haute" ni
 # "temps réel" : elles pourraient bloquer le reste du système.
@@ -55,6 +67,7 @@ COULEUR_ORANGE = (0, 165, 255)
 COULEUR_ROUGE = (0, 0, 255)
 COULEUR_BLANC = (255, 255, 255)
 COULEUR_NOIR = (0, 0, 0)
+COULEUR_BLEU = (230, 140, 0)
 
 # Message affiché au bandeau ORANGE / ROUGE selon la cause (sans accents pour OpenCV)
 MESSAGES_CAUSE = {
@@ -213,6 +226,68 @@ class MachineEtats:
 
 
 # ---------------------------------------------------------------------------
+# Inscription d'une personne autorisée
+# ---------------------------------------------------------------------------
+def demander_prenom(base):
+    """
+    Demande le prénom dans le terminal (la vidéo est figée pendant la saisie).
+    Renvoie le prénom à inscrire, ou None si on annule.
+    """
+    prenom = input("Prénom de la personne à inscrire (Entrée vide = annuler) : ").strip()
+    if not prenom:
+        print("Inscription annulée.")
+        return None
+
+    deja_connue = {p["prenom"]: p for p in base.personnes()}.get(prenom)
+    if deja_connue is None:
+        try:
+            base.ajouter_personne(prenom)
+        except ValueError as erreur:
+            print(f"Inscription refusée : {erreur}")
+            return None
+        print(f"{prenom} ajouté(e) à la base.")
+    elif not deja_connue["actif"]:
+        # Une personne révoquée ne revient pas par la petite porte
+        print(f"Inscription refusée : l'accès de {prenom} a été révoqué.")
+        return None
+    else:
+        print(f"{prenom} est déjà inscrit(e) : ajout de nouvelles photos.")
+    return prenom
+
+
+class Inscription:
+    """
+    Prend NB_PHOTOS_INSCRIPTION photos, uniquement quand une seule personne
+    est dans le cadre, et enregistre une empreinte par photo dans la base.
+    """
+
+    def __init__(self, base, prenom):
+        self.base = base
+        self.prenom = prenom
+        self.nb_photos = 0
+        self.derniere_photo = 0.0
+
+    def termine(self):
+        return self.nb_photos >= NB_PHOTOS_INSCRIPTION
+
+    def consigne(self):
+        return CONSIGNES_INSCRIPTION[self.nb_photos % len(CONSIGNES_INSCRIPTION)]
+
+    def traiter(self, frame, visages):
+        """À appeler à chaque trame, sur l'image BRUTE (avant tout dessin)."""
+        if len(visages) != 1 or time.monotonic() - self.derniere_photo < INTERVALLE_PHOTOS_S:
+            return
+        # Calculée par le module IA : même alignement que pour la reconnaissance en direct
+        empreinte = ia.compute_embedding(frame)
+        if empreinte is None:
+            return
+        self.base.ajouter_empreinte(self.prenom, empreinte)
+        self.nb_photos += 1
+        self.derniere_photo = time.monotonic()
+        print(f"Photo {self.nb_photos}/{NB_PHOTOS_INSCRIPTION} enregistrée pour {self.prenom}.")
+
+
+# ---------------------------------------------------------------------------
 # Affichage
 # ---------------------------------------------------------------------------
 def dessiner_visages(frame, visages):
@@ -246,6 +321,22 @@ def dessiner_etat(frame, machine):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COULEUR_NOIR, 2)
     # Cadre autour de l'image, bien visible pendant la démo
     cv2.rectangle(frame, (0, 0), (LARGEUR - 1, HAUTEUR - 1), couleur, 6)
+
+
+def dessiner_inscription(frame, inscription, visages):
+    """Bandeau bleu à la place du bandeau d'état : la surveillance est suspendue."""
+    if len(visages) == 1:
+        message = f"{inscription.nb_photos}/{NB_PHOTOS_INSCRIPTION} - {inscription.consigne()}"
+    elif not visages:
+        message = "Placez-vous face a la camera"
+    else:
+        message = "Une seule personne dans le cadre"
+    cv2.rectangle(frame, (0, HAUTEUR - 75), (LARGEUR, HAUTEUR), COULEUR_BLEU, -1)
+    cv2.putText(frame, f"MODE INSCRIPTION : {inscription.prenom}", (15, HAUTEUR - 47),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, COULEUR_BLANC, 2)
+    cv2.putText(frame, message, (15, HAUTEUR - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, COULEUR_BLANC, 2)
+    cv2.rectangle(frame, (0, 0), (LARGEUR - 1, HAUTEUR - 1), COULEUR_BLEU, 6)
 
 
 def dessiner_performance(frame, traitement_ms, fps):
@@ -297,6 +388,18 @@ def augmenter_priorite():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="SENTINEL-X - module vision")
+    parser.add_argument("--inscription", action="store_true",
+                        help="autorise l'inscription de nouvelles personnes (touche e)")
+    args = parser.parse_args()
+
+    # L'inscription n'existe que si on relance le script exprès : en surveillance
+    # normale, un intrus devant la caméra ne peut pas s'inscrire lui-même.
+    inscription_possible = args.inscription and not MODE_SIMULATION
+    if inscription_possible and not hasattr(ia, "compute_embedding"):
+        print("Inscription impossible : le module IA ne fournit pas encore compute_embedding().")
+        inscription_possible = False
+
     augmenter_priorite()
     # Chargement de l'IA AVANT la boucle (~0,4 s) : sinon la première trame
     # mesurerait ~400 ms et l'incrustation passerait au rouge pendant la démo.
@@ -315,6 +418,7 @@ def main():
 
     base = BaseDonnees()
     machine = MachineEtats(base)
+    inscription = None      # Inscription en cours, sinon None
     inconnu = False         # Simulation : touche 'i'
     aucun_visage = False    # Simulation : touche 'n'
 
@@ -328,6 +432,8 @@ def main():
         print("Mode simulation : 'i' = inconnu, 'n' = aucun visage.")
     else:
         print("Touche 'r' : recharger les visages autorisés.")
+    if inscription_possible:
+        print("MODE INSCRIPTION ACTIF : touche 'e' pour inscrire une personne, Echap pour annuler.")
 
     try:
         while True:
@@ -349,19 +455,33 @@ def main():
             else:
                 visages = analyser_trame(frame)
 
-            ancien_etat = machine.etat
-            # Visages triés par taille : le premier est le plus proche de la caméra
-            similarite = visages[0]["similarity"] if visages else None
-            machine.mettre_a_jour(cause_menace(visages), identites(visages),
-                                  similarite, traitement_ms or 0.0)
-            # Photo AVANT les dessins : on garde l'image brute comme preuve
-            if machine.etat == "ROUGE" and ancien_etat != "ROUGE":
-                chemin = enregistrer_capture(frame)
-                # Relie la photo à l'alerte ROUGE qui vient d'être enregistrée
-                base.enregistrer_capture(chemin, machine.dernier_evenement_id)
+            if inscription is not None:
+                # Surveillance suspendue : la personne, encore inconnue, ne doit pas
+                # déclencher une alerte d'intrusion pendant sa propre inscription
+                inscription.traiter(frame, visages)
+                if inscription.termine():
+                    base.enregistrer_evenement("vision", "INSCRIPTION", {
+                        "prenom": inscription.prenom, "nb_photos": inscription.nb_photos})
+                    print(f"Inscription de {inscription.prenom} terminée.")
+                    print(ia.reload_references())
+                    inscription = None
+            else:
+                ancien_etat = machine.etat
+                # Visages triés par taille : le premier est le plus proche de la caméra
+                similarite = visages[0]["similarity"] if visages else None
+                machine.mettre_a_jour(cause_menace(visages), identites(visages),
+                                      similarite, traitement_ms or 0.0)
+                # Photo AVANT les dessins : on garde l'image brute comme preuve
+                if machine.etat == "ROUGE" and ancien_etat != "ROUGE":
+                    chemin = enregistrer_capture(frame)
+                    # Relie la photo à l'alerte ROUGE qui vient d'être enregistrée
+                    base.enregistrer_capture(chemin, machine.dernier_evenement_id)
 
             dessiner_visages(frame, visages)
-            dessiner_etat(frame, machine)
+            if inscription is not None:
+                dessiner_inscription(frame, inscription, visages)
+            else:
+                dessiner_etat(frame, machine)
 
             # --- Fin de la mesure (avant l'affichage) ---
             fin = time.perf_counter()
@@ -392,6 +512,20 @@ def main():
                 inconnu = not inconnu
             if MODE_SIMULATION and touche == ord("n"):
                 aucun_visage = not aucun_visage
+            if inscription_possible and inscription is None and touche == ord("e"):
+                # Prévenir à l'écran avant de figer la vidéo pour la saisie
+                cv2.putText(frame, "Saisissez le prenom dans le terminal", (15, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, COULEUR_BLEU, 2)
+                cv2.imshow(NOM_FENETRE, frame)
+                cv2.waitKey(1)
+                prenom = demander_prenom(base)
+                if prenom is not None:
+                    inscription = Inscription(base, prenom)
+            if inscription is not None and touche == 27:      # Echap
+                print(f"Inscription de {inscription.prenom} interrompue "
+                      f"({inscription.nb_photos} photo(s) déjà enregistrée(s)).")
+                print(ia.reload_references())
+                inscription = None
 
             # Sortie aussi par la croix de la fenêtre
             if cv2.getWindowProperty(NOM_FENETRE, cv2.WND_PROP_VISIBLE) < 1:
