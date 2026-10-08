@@ -51,6 +51,8 @@ DOSSIER_CAPTURES = Path(__file__).parent / "captures"
 
 # Inscription d'une personne (uniquement avec : python main.py --inscription)
 NB_PHOTOS_INSCRIPTION = 5          # Une empreinte par photo : plusieurs poses = reconnaissance plus fiable
+PAUSE_ENTRE_PHOTOS_S = 3.0         # Le temps de changer de pose (aussi avant la 1re : on quitte le clavier)
+INTERVALLE_REESSAI_S = 0.7         # Après une photo refusée, on réessaie vite
 # Garde-fous validés par le binôme IA sur nos photos (0 refus à tort) :
 SEUIL_COHERENCE = 0.50             # La photo doit ressembler aux photos déjà inscrites de la personne
 SEUIL_COLLISION = 0.45             # ...et pas trop à celles des autres (reconnaissance à 0,50)
@@ -334,16 +336,16 @@ def verifier_empreinte(base, prenom, empreinte):
 
 class Inscription:
     """
-    Prend NB_PHOTOS_INSCRIPTION photos, chacune déclenchée par la barre d'espace,
-    et enregistre une empreinte par photo dans la base. Une photo refusée ne
-    compte pas : on reste sur la même tant qu'elle n'est pas acceptée.
+    Prend NB_PHOTOS_INSCRIPTION photos automatiquement, avec une courte pause
+    entre chacune pour changer de pose, et enregistre une empreinte par photo
+    dans la base. Une photo refusée ne compte pas : on la retente.
     """
 
     def __init__(self, base, prenom):
         self.base = base
         self.prenom = prenom
         self.nb_photos = 0
-        self.photo_demandee = False     # Passe à True quand on appuie sur Espace
+        self.prochaine_tentative = time.monotonic() + PAUSE_ENTRE_PHOTOS_S
         self.probleme = None            # Raison du dernier refus, affichée à l'écran
 
     def termine(self):
@@ -354,12 +356,10 @@ class Inscription:
 
     def traiter(self, frame, visages):
         """À appeler à chaque trame, sur l'image BRUTE (avant tout dessin)."""
-        if not self.photo_demandee:
+        if len(visages) != 1 or time.monotonic() < self.prochaine_tentative:
             return
-        self.photo_demandee = False     # Une pression = une seule tentative
-        if len(visages) != 1:
-            self.probleme = "aucun visage" if not visages else "une seule personne dans le cadre"
-            return
+        # Par défaut, une tentative refusée est retentée vite
+        self.prochaine_tentative = time.monotonic() + INTERVALLE_REESSAI_S
 
         # La reconnaissance en direct sait déjà qui est là, quelle que soit sa source
         # (base ou dossier) : on n'inscrit pas un visage connu sous un autre prénom
@@ -382,6 +382,7 @@ class Inscription:
         self.base.ajouter_empreinte(self.prenom, empreinte, modele=ia.MODEL_NAME)
         self.nb_photos += 1
         self.probleme = None
+        self.prochaine_tentative = time.monotonic() + PAUSE_ENTRE_PHOTOS_S
         print(f"Photo {self.nb_photos}/{NB_PHOTOS_INSCRIPTION} enregistrée pour {self.prenom}.")
 
 
@@ -434,8 +435,6 @@ def dessiner_inscription(frame, inscription, visages):
     cv2.rectangle(frame, (0, HAUTEUR - 75), (LARGEUR, HAUTEUR), COULEUR_BLEU, -1)
     cv2.putText(frame, f"MODE INSCRIPTION : {inscription.prenom}", (15, HAUTEUR - 47),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COULEUR_BLANC, 2)
-    cv2.putText(frame, "[Espace] photo", (LARGEUR - 175, HAUTEUR - 47),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, COULEUR_BLANC, 2)
     cv2.putText(frame, message, (15, HAUTEUR - 15),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, COULEUR_BLANC, 2)
     cv2.rectangle(frame, (0, 0), (LARGEUR - 1, HAUTEUR - 1), COULEUR_BLEU, 6)
@@ -534,8 +533,7 @@ def main():
     else:
         print("Touche 'r' : recharger les visages autorisés.")
     if inscription_possible:
-        print("MODE INSCRIPTION ACTIF : 'e' inscrire une personne, Espace prendre la photo, "
-              "Echap annuler.")
+        print("MODE INSCRIPTION ACTIF : touche 'e' pour inscrire une personne, Echap pour annuler.")
 
     try:
         while True:
@@ -626,8 +624,6 @@ def main():
                     inscription = Inscription(base, prenom)
                     machine.inscription = prenom
                     machine.publier_etat_periodique()   # Prévenir le dashboard tout de suite
-            if inscription is not None and touche == ord(" "):
-                inscription.photo_demandee = True
             if inscription is not None and touche == 27:      # Echap
                 print(f"Inscription de {inscription.prenom} interrompue "
                       f"({inscription.nb_photos} photo(s) déjà enregistrée(s)).")
