@@ -28,3 +28,5 @@ journaux/
 
 # Base SQLite (empreintes = données biométriques) : jamais dans Git
 donnees/
+
+CLAUDE.md

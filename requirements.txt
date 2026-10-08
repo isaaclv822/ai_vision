@@ -6,5 +6,3 @@
 # fournissent le meme module cv2 et entrent en conflit.
 opencv-contrib-python
 
-# Jour 3, partie Dev : publication MQTTS vers le serveur Kali
-# paho-mqtt
