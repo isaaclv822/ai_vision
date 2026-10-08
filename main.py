@@ -49,7 +49,8 @@ PERIODE_ETAT_S = 2.0
 
 # Photo d'intrusion (passage ROUGE) : encodée en mémoire et envoyée au Kali,
 # JAMAIS écrite sur le disque local (une photo par intrusion, en HTTPS ; aucun flux vidéo).
-# Seules les empreintes (vecteurs) restent en local, dans le SQLite.
+# Restent en local, dans le SQLite : les empreintes (vecteurs) et l'état courant
+# de la vision (une seule ligne, lue par le dashboard).
 
 # Client HTTPS vers l'API du serveur Kali (créé dans main())
 CLIENT_API = None
@@ -239,13 +240,25 @@ class MachineEtats:
     def publier_changement(self, ancien_etat):
         type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
         details = {**self.details(), "etat_precedent": ancien_etat}
-        # Envoi au Kali uniquement : aucun événement n'est stocké en local.
+        # Envoi au Kali : aucun événement n'est stocké en local.
         # L'historique (et le lien photo<->alerte) est tenu côté serveur par l'API.
         send_alert(type_alerte, details)
+        self.mettre_a_jour_dashboard(details)
 
     def publier_etat_periodique(self):
         """Compte rendu régulier, distinct d'un changement : prouve que la vision tourne."""
-        send_alert("ETAT_PERIODIQUE", self.details())
+        details = self.details()
+        send_alert("ETAT_PERIODIQUE", details)
+        self.mettre_a_jour_dashboard(details)
+
+    def mettre_a_jour_dashboard(self, details):
+        """
+        Écrit l'état courant dans la base locale, où le dashboard le relit.
+        UNE seule ligne, écrasée à chaque fois : ni historique ni photo en local.
+        Si elle n'est plus rafraîchie, le dashboard déclare la vision muette.
+        """
+        if self.base is not None:
+            self.base.mettre_a_jour_etat_courant("vision", details)
 
 
 # ---------------------------------------------------------------------------
