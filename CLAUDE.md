@@ -115,11 +115,11 @@ Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur
 Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :
-- Bascule de la reconnaissance vers la BDD (tant qu'elle n'est pas faite, la reconnaissance lit
-  encore `autorises/` : une personne inscrite en BDD n'est pas reconnue en direct). Option A :
-  `facial_recognition` importe `base_donnees` ; option B (préférée par le binôme) : `main.py` appelle
-  `ia.set_references(base.charger_empreintes())`. À trancher ; `set_references` reste à écrire côté IA.
-  Ordre : inscrire d'abord, basculer ensuite (tables vides aujourd'hui).
+- Bascule vers la BDD, **option B retenue** : `main.py` lit la base et appelle
+  `ia.set_references(references)` (`charger_autorises(base)` : au démarrage, après une inscription,
+  touche `r`). Le module IA reste sans dépendance de stockage. Tant que la base est vide ou que
+  `set_references` n'existe pas côté IA, on garde le dossier `autorises/` (message au démarrage).
+  **Reste côté binôme** : écrire `set_references(references)` (remplace sa liste de références).
 - Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.

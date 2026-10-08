@@ -258,6 +258,27 @@ def demander_prenom(base):
     return prenom
 
 
+def charger_autorises(base):
+    """
+    Transmet au module IA la liste des personnes autorisées, lue dans la base.
+    Tant que la base est vide (ou que le module IA n'a pas set_references),
+    on garde l'ancien dossier autorises/ : personne ne perd sa reconnaissance.
+    """
+    references = base.charger_empreintes(modele=ia.MODEL_NAME)
+    if references and hasattr(ia, "set_references"):
+        ia.set_references(references)
+        noms = sorted({nom for nom, _ in references})
+        print(f"Autorisés (base) : {len(references)} empreinte(s) pour {', '.join(noms)}")
+    else:
+        raison = "base vide" if not references else "set_references() absente du module IA"
+        print(f"Autorisés (dossier autorises/, {raison}) : {ia.reload_references()}")
+
+    # Empreintes d'un ancien modèle : inutilisables, à refaire avec --inscription
+    perimees = base.compter_empreintes_autre_modele(modele=ia.MODEL_NAME)
+    if perimees:
+        print(f"Attention : {perimees} empreinte(s) calculée(s) avec un autre modèle, ignorée(s).")
+
+
 def verifier_empreinte(base, prenom, empreinte):
     """
     Garde-fous contre le mélange d'identités. Renvoie None si la photo est
@@ -442,20 +463,22 @@ def main():
     augmenter_priorite()
     # Chargement de l'IA AVANT la boucle (~0,4 s) : sinon la première trame
     # mesurerait ~400 ms et l'incrustation passerait au rouge pendant la démo.
+    base = BaseDonnees()
     if not MODE_SIMULATION:
         print(ia.initialize())
+        charger_autorises(base)
 
     # CAP_DSHOW : backend Windows, ouverture de la webcam beaucoup plus rapide
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print("Erreur : impossible d'ouvrir la webcam.")
+        base.fermer()
         return
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, LARGEUR)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HAUTEUR)
     cv2.namedWindow(NOM_FENETRE)
 
-    base = BaseDonnees()
     machine = MachineEtats(base)
     inscription = None      # Inscription en cours, sinon None
     inconnu = False         # Simulation : touche 'i'
@@ -502,7 +525,7 @@ def main():
                     base.enregistrer_evenement("vision", "INSCRIPTION", {
                         "prenom": inscription.prenom, "nb_photos": inscription.nb_photos})
                     print(f"Inscription de {inscription.prenom} terminée.")
-                    print(ia.reload_references())
+                    charger_autorises(base)
                     inscription = None
             else:
                 ancien_etat = machine.etat
@@ -546,7 +569,7 @@ def main():
             if touche == ord("q"):
                 break
             if not MODE_SIMULATION and touche == ord("r"):
-                print(ia.reload_references())
+                charger_autorises(base)
             if MODE_SIMULATION and touche == ord("i"):
                 inconnu = not inconnu
             if MODE_SIMULATION and touche == ord("n"):
@@ -563,7 +586,7 @@ def main():
             if inscription is not None and touche == 27:      # Echap
                 print(f"Inscription de {inscription.prenom} interrompue "
                       f"({inscription.nb_photos} photo(s) déjà enregistrée(s)).")
-                print(ia.reload_references())
+                charger_autorises(base)
                 inscription = None
 
             # Sortie aussi par la croix de la fenêtre
