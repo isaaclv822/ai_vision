@@ -90,8 +90,13 @@ Fait dans `main.py` :
   peut pas s'inscrire en surveillance normale). `e` → prénom saisi dans le terminal (vidéo figée) →
   5 photos auto (un seul visage, toutes les 0,7 s, consignes de pose) → une empreinte par photo dans la
   BDD → `ia.reload_references()`. Surveillance suspendue pendant le scan, événement `INSCRIPTION` en base.
-  Personne révoquée refusée. **Dépend du binôme** : `ia.compute_embedding(frame)` → (1, 128) ou None,
-  et `reload_references()` qui lit `charger_empreintes()`. Sans `compute_embedding`, le mode se désactive.
+  Personne révoquée refusée. Empreinte calculée **uniquement** par `ia.reference_embedding(image)`
+  → `(empreinte, probleme)` (jamais recalculée soi-même : sans l'alignement du module IA, elle serait
+  inutilisable sans erreur visible), enregistrée avec `modele=ia.MODEL_NAME`. Garde-fous
+  (`verifier_empreinte`, via `ia.compare`) : cohérence ≥ 0,50 avec les photos de la personne, collision
+  < 0,45 avec les autres. Visage obstrué refusé. Raison du refus affichée dans le bandeau.
+  Scores de référence réels (binôme, leave-one-out) : ~0,70 pour une personne autorisée, 0,37 max
+  entre deux personnes, seuil 0,50. Inscrire avec la webcam du poste, pas des photos de téléphone.
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
 Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
@@ -110,8 +115,11 @@ Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur
 Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :
-- Binôme : ajouter `ia.compute_embedding(frame)` et faire lire la BDD à `reload_references()`
-  (message envoyé). Puis réinscrire les personnes (ou importer les photos de `autorises/`).
+- Bascule de la reconnaissance vers la BDD (tant qu'elle n'est pas faite, la reconnaissance lit
+  encore `autorises/` : une personne inscrite en BDD n'est pas reconnue en direct). Option A :
+  `facial_recognition` importe `base_donnees` ; option B (préférée par le binôme) : `main.py` appelle
+  `ia.set_references(base.charger_empreintes())`. À trancher ; `set_references` reste à écrire côté IA.
+  Ordre : inscrire d'abord, basculer ensuite (tables vides aujourd'hui).
 - Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.

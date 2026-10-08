@@ -49,6 +49,9 @@ DOSSIER_CAPTURES = Path(__file__).parent / "captures"
 # Inscription d'une personne (uniquement avec : python main.py --inscription)
 NB_PHOTOS_INSCRIPTION = 5          # Une empreinte par photo : plusieurs poses = reconnaissance plus fiable
 INTERVALLE_PHOTOS_S = 0.7          # Laisse le temps de changer de pose entre deux photos
+# Garde-fous validés par le binôme IA sur nos photos (0 refus à tort) :
+SEUIL_COHERENCE = 0.50             # La photo doit ressembler aux photos déjà inscrites de la personne
+SEUIL_COLLISION = 0.45             # ...et pas trop à celles des autres (reconnaissance à 0,50)
 CONSIGNES_INSCRIPTION = [          # Sans accents : affichées par OpenCV
     "Regardez la camera",
     "Tournez legerement la tete a gauche",
@@ -255,6 +258,32 @@ def demander_prenom(base):
     return prenom
 
 
+def verifier_empreinte(base, prenom, empreinte):
+    """
+    Garde-fous contre le mélange d'identités. Renvoie None si la photo est
+    acceptable, sinon la raison du refus (sans accents : affichée par OpenCV).
+    """
+    references = base.charger_empreintes(modele=ia.MODEL_NAME)
+
+    # 1. Si la personne a déjà des photos, la nouvelle doit lui ressembler.
+    #    On prend le maximum : deux poses très différentes peuvent se ressembler peu.
+    siennes = [e for nom, e in references if nom == prenom]
+    if siennes:
+        coherence = max(ia.compare(empreinte, e) for e in siennes)
+        if coherence < SEUIL_COHERENCE:
+            return f"ne ressemble pas aux photos de {prenom} ({coherence:.2f})"
+
+    # 2. Elle ne doit pas trop ressembler à quelqu'un d'autre : sinon, en direct,
+    #    l'un pourrait être reconnu à la place de l'autre.
+    autres = [(nom, e) for nom, e in references if nom != prenom]
+    if autres:
+        proche, score = max(((nom, ia.compare(empreinte, e)) for nom, e in autres),
+                            key=lambda couple: couple[1])
+        if score >= SEUIL_COLLISION:
+            return f"ressemble trop a {proche} ({score:.2f})"
+    return None
+
+
 class Inscription:
     """
     Prend NB_PHOTOS_INSCRIPTION photos, uniquement quand une seule personne
@@ -265,7 +294,8 @@ class Inscription:
         self.base = base
         self.prenom = prenom
         self.nb_photos = 0
-        self.derniere_photo = 0.0
+        self.derniere_tentative = 0.0
+        self.probleme = None            # Raison du dernier refus, affichée à l'écran
 
     def termine(self):
         return self.nb_photos >= NB_PHOTOS_INSCRIPTION
@@ -275,15 +305,25 @@ class Inscription:
 
     def traiter(self, frame, visages):
         """À appeler à chaque trame, sur l'image BRUTE (avant tout dessin)."""
-        if len(visages) != 1 or time.monotonic() - self.derniere_photo < INTERVALLE_PHOTOS_S:
+        if len(visages) != 1 or time.monotonic() - self.derniere_tentative < INTERVALLE_PHOTOS_S:
             return
-        # Calculée par le module IA : même alignement que pour la reconnaissance en direct
-        empreinte = ia.compute_embedding(frame)
-        if empreinte is None:
+        self.derniere_tentative = time.monotonic()
+
+        if visages[0]["obstructed"]:
+            self.probleme = "visage obstrue"    # Empoisonnerait la base
             return
-        self.base.ajouter_empreinte(self.prenom, empreinte)
+        # Toujours passer par le module IA : une empreinte calculée autrement
+        # (sans son alignement) serait inutilisable, sans aucune erreur visible
+        empreinte, probleme = ia.reference_embedding(frame)
+        if probleme is None:
+            probleme = verifier_empreinte(self.base, self.prenom, empreinte)
+        if probleme is not None:
+            self.probleme = probleme
+            return
+
+        self.base.ajouter_empreinte(self.prenom, empreinte, modele=ia.MODEL_NAME)
         self.nb_photos += 1
-        self.derniere_photo = time.monotonic()
+        self.probleme = None
         print(f"Photo {self.nb_photos}/{NB_PHOTOS_INSCRIPTION} enregistrée pour {self.prenom}.")
 
 
@@ -325,7 +365,9 @@ def dessiner_etat(frame, machine):
 
 def dessiner_inscription(frame, inscription, visages):
     """Bandeau bleu à la place du bandeau d'état : la surveillance est suspendue."""
-    if len(visages) == 1:
+    if len(visages) == 1 and inscription.probleme:
+        message = f"Photo refusee : {inscription.probleme}"
+    elif len(visages) == 1:
         message = f"{inscription.nb_photos}/{NB_PHOTOS_INSCRIPTION} - {inscription.consigne()}"
     elif not visages:
         message = "Placez-vous face a la camera"
@@ -396,9 +438,6 @@ def main():
     # L'inscription n'existe que si on relance le script exprès : en surveillance
     # normale, un intrus devant la caméra ne peut pas s'inscrire lui-même.
     inscription_possible = args.inscription and not MODE_SIMULATION
-    if inscription_possible and not hasattr(ia, "compute_embedding"):
-        print("Inscription impossible : le module IA ne fournit pas encore compute_embedding().")
-        inscription_possible = False
 
     augmenter_priorite()
     # Chargement de l'IA AVANT la boucle (~0,4 s) : sinon la première trame
