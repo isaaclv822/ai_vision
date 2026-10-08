@@ -50,6 +50,12 @@ par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de co
 - Mesurer le **temps de traitement** (après `cap.read()` jusqu'avant l'affichage), pas seulement
   l'intervalle entre trames, qui dépend surtout de la caméra (~33 ms à 30 fps).
 - Afficher la mesure en incrustation sur la vidéo pour la démo.
+- Le budget dépend de la charge du PC (mesures du binôme) : ~30 ms au repos, 48 à 103 ms de médiane
+  avec VS Code / navigateurs / Java ouverts. `main.py` se met donc en priorité Windows
+  « au-dessus de la normale » (`PRIORITE_AU_DESSUS_NORMALE`) : pire cas ~61 ms au lieu de ~226 ms.
+- **Check-list avant la démo** : fermer VS Code, navigateurs et Java ; mode d'alimentation
+  « Performances élevées » ; PC branché. À dire au jury : « 30 ms sur machine dédiée, jusqu'à 100 ms
+  sur un poste chargé — le boîtier autonome du cahier des charges n'aurait pas cette concurrence ».
 
 ## Machine à états
 
