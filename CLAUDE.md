@@ -10,8 +10,9 @@ Notre groupe (2 dev, 3 cyber) a **fusionné les volets IA et Cyber** du sujet :
 une IA qui détecte les menaces, sur un pipeline chiffré et durci par la cyber.
 
 Ce dépôt contient le **module vision** : un script Python qui analyse la webcam en temps réel
-et déclenche une alerte d'intrusion quand un visage est **inconnu**, **absent** (dos tourné)
-ou, plus tard, **caché** (masque, cagoule, écharpe, main).
+et déclenche une alerte d'intrusion quand un visage est **inconnu** ou, plus tard, **caché**
+(masque, cagoule, écharpe, main). **Personne devant la caméra = pas d'alerte** (choix du groupe ;
+limite connue pour le pentest : une webcam cachée ressemble aussi à « personne »).
 Il contient aussi le **dashboard de supervision de tout le projet** (`dashboard.py`), demandé par le groupe.
 
 Répartition dans ce module :
@@ -61,7 +62,7 @@ par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de co
 
 - **VERT** : tous les visages du champ sont reconnus. Chrono à 0.
 - **ORANGE** : situation suspecte, chrono démarré. Le message dépend de la cause
-  (`aucun_visage`, `visage_inconnu`, `obstruction`).
+  (`visage_inconnu`, `obstruction`). Aucun visage = VERT (« Surveillance active »).
 - **ROUGE** : menace continue > 3 s. Alerte + affichage « ALERTE INTRUSION ».
 
 Règles :

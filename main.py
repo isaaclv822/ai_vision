@@ -78,7 +78,6 @@ COULEUR_BLEU = (230, 140, 0)
 
 # Message affiché au bandeau ORANGE / ROUGE selon la cause (sans accents pour OpenCV)
 MESSAGES_CAUSE = {
-    "aucun_visage": "Aucun visage detecte",
     "visage_inconnu": "Visage non reconnu",
     "obstruction": "Veuillez degager votre visage",
 }
@@ -140,9 +139,9 @@ def cause_menace(visages):
     """
     Décide si la trame est suspecte et pourquoi. Renvoie None si tout va bien.
     Règle stricte : un seul visage suspect suffit, même à côté d'une personne autorisée.
+    Personne devant la caméra = rien à signaler (choix du groupe). Limite connue :
+    une webcam cachée par un attaquant ressemble aussi à "personne devant".
     """
-    if not visages:
-        return "aucun_visage"      # Dos tourné, hors champ
     for visage in visages:
         # Toujours faux pour l'instant : prêt pour le futur modèle d'obstruction
         if visage["obstructed"] and visage["confidence"] >= SEUIL_CONFIANCE:
@@ -406,7 +405,10 @@ def dessiner_etat(frame, machine):
     """Bandeau en bas de l'image avec la couleur de l'état et le message."""
     if machine.etat == "VERT":
         couleur = COULEUR_VERT
-        message = "ACCES AUTORISE : " + ", ".join(machine.identites)
+        if machine.identites:
+            message = "ACCES AUTORISE : " + ", ".join(machine.identites)
+        else:
+            message = "Surveillance active - personne devant la camera"
     elif machine.etat == "ORANGE":
         couleur = COULEUR_ORANGE
         message = f"{MESSAGES_CAUSE[machine.cause]} ({machine.duree_menace():.1f} s)"
