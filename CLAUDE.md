@@ -90,7 +90,7 @@ Fait dans `main.py` :
   est reliée à l'alerte ROUGE (`MachineEtats.dernier_evenement_id`). ~1 ms par écriture.
 - **Inscription** : `python main.py --inscription` (seul mode où la touche `e` existe : un intrus ne
   peut pas s'inscrire en surveillance normale). `e` → prénom saisi dans le terminal (vidéo figée) →
-  5 photos auto (un seul visage, compte à rebours de 30 s avant chaque photo `DELAI_AVANT_PHOTO_S`, réessai en 0,7 s après un refus, consignes de pose) → une empreinte par photo dans la
+  5 photos, chacune déclenchée par Espace (une seule personne dans le cadre, consigne de pose affichée ; une photo refusée ne compte pas, on reste dessus) → une empreinte par photo dans la
   BDD → `ia.reload_references()`. Surveillance suspendue pendant le scan, événement `INSCRIPTION` en base.
   Personne révoquée refusée. Empreinte calculée **uniquement** par `ia.reference_embedding(image)`
   → `(empreinte, probleme)` (jamais recalculée soi-même : sans l'alignement du module IA, elle serait

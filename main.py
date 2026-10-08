@@ -9,7 +9,6 @@ L'IA (détection + reconnaissance faciale) vit dans facial_recognition.py.
 import argparse
 import ctypes
 import json
-import math
 import sys
 import time
 from ctypes import wintypes
@@ -52,8 +51,6 @@ DOSSIER_CAPTURES = Path(__file__).parent / "captures"
 
 # Inscription d'une personne (uniquement avec : python main.py --inscription)
 NB_PHOTOS_INSCRIPTION = 5          # Une empreinte par photo : plusieurs poses = reconnaissance plus fiable
-DELAI_AVANT_PHOTO_S = 30.0         # Compte à rebours avant chaque photo : le temps de prendre la pose
-INTERVALLE_REESSAI_S = 0.7         # Après une photo refusée, on réessaie vite (pas 30 s de plus)
 # Garde-fous validés par le binôme IA sur nos photos (0 refus à tort) :
 SEUIL_COHERENCE = 0.50             # La photo doit ressembler aux photos déjà inscrites de la personne
 SEUIL_COLLISION = 0.45             # ...et pas trop à celles des autres (reconnaissance à 0,50)
@@ -337,21 +334,17 @@ def verifier_empreinte(base, prenom, empreinte):
 
 class Inscription:
     """
-    Prend NB_PHOTOS_INSCRIPTION photos, uniquement quand une seule personne
-    est dans le cadre, et enregistre une empreinte par photo dans la base.
+    Prend NB_PHOTOS_INSCRIPTION photos, chacune déclenchée par la barre d'espace,
+    et enregistre une empreinte par photo dans la base. Une photo refusée ne
+    compte pas : on reste sur la même tant qu'elle n'est pas acceptée.
     """
 
     def __init__(self, base, prenom):
         self.base = base
         self.prenom = prenom
         self.nb_photos = 0
-        self.derniere_tentative = 0.0
-        self.prochaine_photo = time.monotonic() + DELAI_AVANT_PHOTO_S
+        self.photo_demandee = False     # Passe à True quand on appuie sur Espace
         self.probleme = None            # Raison du dernier refus, affichée à l'écran
-
-    def secondes_restantes(self):
-        """Temps avant la prochaine photo (0 = on photographie dès que possible)."""
-        return max(0.0, self.prochaine_photo - time.monotonic())
 
     def termine(self):
         return self.nb_photos >= NB_PHOTOS_INSCRIPTION
@@ -361,11 +354,12 @@ class Inscription:
 
     def traiter(self, frame, visages):
         """À appeler à chaque trame, sur l'image BRUTE (avant tout dessin)."""
-        if len(visages) != 1 or self.secondes_restantes() > 0:
+        if not self.photo_demandee:
             return
-        if time.monotonic() - self.derniere_tentative < INTERVALLE_REESSAI_S:
+        self.photo_demandee = False     # Une pression = une seule tentative
+        if len(visages) != 1:
+            self.probleme = "aucun visage" if not visages else "une seule personne dans le cadre"
             return
-        self.derniere_tentative = time.monotonic()
 
         # La reconnaissance en direct sait déjà qui est là, quelle que soit sa source
         # (base ou dossier) : on n'inscrit pas un visage connu sous un autre prénom
@@ -388,7 +382,6 @@ class Inscription:
         self.base.ajouter_empreinte(self.prenom, empreinte, modele=ia.MODEL_NAME)
         self.nb_photos += 1
         self.probleme = None
-        self.prochaine_photo = time.monotonic() + DELAI_AVANT_PHOTO_S
         print(f"Photo {self.nb_photos}/{NB_PHOTOS_INSCRIPTION} enregistrée pour {self.prenom}.")
 
 
@@ -430,21 +423,19 @@ def dessiner_etat(frame, machine):
 
 def dessiner_inscription(frame, inscription, visages):
     """Bandeau bleu à la place du bandeau d'état : la surveillance est suspendue."""
-    restantes = inscription.secondes_restantes()
     if not visages:
         message = "Placez-vous face a la camera"
     elif len(visages) > 1:
         message = "Une seule personne dans le cadre"
-    elif restantes > 0:
-        message = (f"{inscription.nb_photos}/{NB_PHOTOS_INSCRIPTION} - {inscription.consigne()}"
-                   f" - photo dans {math.ceil(restantes)} s")
     elif inscription.probleme:
-        message = f"Photo refusee : {inscription.probleme}"
+        message = f"Refusee : {inscription.probleme}"
     else:
-        message = "Ne bougez plus..."
+        message = f"Photo {inscription.nb_photos + 1}/{NB_PHOTOS_INSCRIPTION} : {inscription.consigne()}"
     cv2.rectangle(frame, (0, HAUTEUR - 75), (LARGEUR, HAUTEUR), COULEUR_BLEU, -1)
     cv2.putText(frame, f"MODE INSCRIPTION : {inscription.prenom}", (15, HAUTEUR - 47),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COULEUR_BLANC, 2)
+    cv2.putText(frame, "[Espace] photo", (LARGEUR - 175, HAUTEUR - 47),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, COULEUR_BLANC, 2)
     cv2.putText(frame, message, (15, HAUTEUR - 15),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, COULEUR_BLANC, 2)
     cv2.rectangle(frame, (0, 0), (LARGEUR - 1, HAUTEUR - 1), COULEUR_BLEU, 6)
@@ -543,7 +534,8 @@ def main():
     else:
         print("Touche 'r' : recharger les visages autorisés.")
     if inscription_possible:
-        print("MODE INSCRIPTION ACTIF : touche 'e' pour inscrire une personne, Echap pour annuler.")
+        print("MODE INSCRIPTION ACTIF : 'e' inscrire une personne, Espace prendre la photo, "
+              "Echap annuler.")
 
     try:
         while True:
@@ -634,6 +626,8 @@ def main():
                     inscription = Inscription(base, prenom)
                     machine.inscription = prenom
                     machine.publier_etat_periodique()   # Prévenir le dashboard tout de suite
+            if inscription is not None and touche == ord(" "):
+                inscription.photo_demandee = True
             if inscription is not None and touche == 27:      # Echap
                 print(f"Inscription de {inscription.prenom} interrompue "
                       f"({inscription.nb_photos} photo(s) déjà enregistrée(s)).")
