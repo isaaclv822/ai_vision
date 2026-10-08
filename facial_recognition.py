@@ -16,6 +16,9 @@ Contrat avec la partie Dev :
 
 Liste vide = aucun visage dans le champ, ce qui est une situation suspecte.
 
+Pour l'inscription d'une personne, utiliser reference_embedding() et compare() :
+une empreinte n'est comparable que si le pretraitement est identique.
+
 Fonctionnement detaille  : docs/EXPLICATION_CODE.md
 Notes pour la partie Dev : docs/NOTES_POUR_DEV.md
 """
@@ -37,11 +40,19 @@ WIDTH, HEIGHT = 640, 480        # Resolution imposee par le cahier des charges
 DETECTION_THRESHOLD = 0.9       # Score minimal pour retenir un visage
 
 # Similarite cosinus au-dela de laquelle c'est la meme personne.
-# Mesure : meme personne 0.84-0.90, autre personne 0.21, seuil OpenCV 0.363.
+# Mesure en validation leave-one-out sur 11 photos : meme personne 0.62-0.80,
+# personnes differentes 0.366 au maximum. Seuil documente par OpenCV : 0.363.
+# 0.50 tombe au milieu de 0.366 et 0.652 (la pire correspondance legitime).
 SIMILARITY_THRESHOLD = 0.50
+
+# Nom du modele qui calcule les empreintes. A garder identique a
+# MODELE_EMPREINTE de base_donnees.py : une empreinte n'a de sens que pour le
+# modele qui l'a produite. Changer de modele invalide toutes les empreintes.
+MODEL_NAME = "sface_2021dec"
 
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png")
 MAX_PHOTO_SIZE = 640            # Cote maximal d'une photo de reference (voir _downscale)
+MIN_REFERENCE_FACE = 80         # Visage plus petit = empreinte de reference mediocre
 
 # Etat du module : les deux reseaux et les empreintes sont des ressources
 # uniques et couteuses a charger. Les garder ici permet d'exposer a la partie
@@ -135,6 +146,67 @@ def authorized_people():
     return sorted({name for name, _ in _references})
 
 
+# ---------------------------------------------------------------------------
+# Inscription (utilise par la partie Dev)
+# ---------------------------------------------------------------------------
+def reference_embedding(image):
+    """
+    Calcule l'empreinte d'une photo destinee a etre enregistree comme reference.
+
+    Renvoie (empreinte, probleme) :
+        (empreinte de forme (1, 128), None)  photo exploitable
+        (None, "message en francais")        photo a refuser, raison affichable
+
+    Les controles sont plus stricts qu'a l'execution : une mauvaise trame en
+    direct est oubliee a la trame suivante, une mauvaise reference pollue la
+    base durablement.
+
+    A utiliser impérativement plutot que de recalculer l'empreinte soi-meme :
+    elle n'est comparable que si le pretraitement est identique a celui de
+    analyze_frame() (reduction, puis alignCrop sur les 5 points de YuNet).
+    Appeler SFace sans alignCrop produit une empreinte inutilisable, et
+    silencieusement : aucune erreur, mais plus personne n'est reconnu.
+    """
+    if _detector is None:
+        raise RuntimeError("facial_recognition.initialize() doit etre appele "
+                           "avant reference_embedding().")
+    if image is None:
+        return None, "image illisible"
+
+    image = _downscale(image)
+    _detector.setInputSize((image.shape[1], image.shape[0]))
+    _, rows = _detector.detect(image)
+
+    if rows is None:
+        return None, "aucun visage detecte"
+    if len(rows) > 1:
+        # On refuse au lieu de prendre le plus grand : on ne sait pas laquelle
+        # des personnes presentes doit etre inscrite.
+        return None, f"{len(rows)} visages detectes, une seule personne attendue"
+
+    width, height = int(rows[0][2]), int(rows[0][3])
+    if min(width, height) < MIN_REFERENCE_FACE:
+        return None, (f"visage trop petit ({width}x{height} px, "
+                      f"{MIN_REFERENCE_FACE} minimum) : rapprochez-vous")
+
+    return _encode(image, rows[0]), None
+
+
+def compare(embedding_a, embedding_b):
+    """
+    Similarite cosinus entre deux empreintes : 1 = identiques, 0 = sans rapport.
+
+    Sert aux controles d'inscription : verifier qu'une nouvelle photo ressemble
+    assez aux photos deja enregistrees de la personne, et pas trop a celles des
+    autres.
+    """
+    if _recognizer is None:
+        raise RuntimeError("facial_recognition.initialize() doit etre appele "
+                           "avant compare().")
+    return float(_recognizer.match(embedding_a, embedding_b,
+                                   cv2.FaceRecognizerSF_FR_COSINE))
+
+
 def debug_aligned_face(frame):
     """Visage aligne 112x112 recu par SFace, ou None. Mise au point uniquement."""
     if _detector is None:
@@ -193,10 +265,13 @@ def _downscale(image, max_size=MAX_PHOTO_SIZE):
     """
     Reduit une photo dont le plus grand cote depasse max_size.
 
-    Les anchors de YuNet sont calibres pour des visages d'une certaine taille en
-    pixels : sur une photo de telephone, le visage est trop grand et sort de la
-    plage couverte, donc il n'est pas detecte (sans erreur). La webcam sort du
-    640x480, elle n'est jamais concernee.
+    YuNet est entraine pour des visages d'environ 10x10 a 300x300 px. Au-dela,
+    il trouve toujours le visage mais son score s'effondre : mesure sur nos
+    photos, 0.94 pour un visage de 216 px, 0.89 a 375 px, 0.68 a 885 px. Le
+    visage se fait donc rejeter par DETECTION_THRESHOLD, pas par le detecteur.
+    Reduire l'image le ramene dans la plage ou YuNet est sur de lui.
+
+    La webcam sort du 640x480 : elle n'est jamais concernee.
     """
     height, width = image.shape[:2]
     scale = max_size / max(height, width)
