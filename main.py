@@ -9,6 +9,7 @@ L'IA (détection + reconnaissance faciale) vit dans facial_recognition.py.
 import argparse
 import ctypes
 import json
+import math
 import sys
 import time
 from ctypes import wintypes
@@ -51,7 +52,8 @@ DOSSIER_CAPTURES = Path(__file__).parent / "captures"
 
 # Inscription d'une personne (uniquement avec : python main.py --inscription)
 NB_PHOTOS_INSCRIPTION = 5          # Une empreinte par photo : plusieurs poses = reconnaissance plus fiable
-INTERVALLE_PHOTOS_S = 0.7          # Laisse le temps de changer de pose entre deux photos
+DELAI_AVANT_PHOTO_S = 30.0         # Compte à rebours avant chaque photo : le temps de prendre la pose
+INTERVALLE_REESSAI_S = 0.7         # Après une photo refusée, on réessaie vite (pas 30 s de plus)
 # Garde-fous validés par le binôme IA sur nos photos (0 refus à tort) :
 SEUIL_COHERENCE = 0.50             # La photo doit ressembler aux photos déjà inscrites de la personne
 SEUIL_COLLISION = 0.45             # ...et pas trop à celles des autres (reconnaissance à 0,50)
@@ -344,7 +346,12 @@ class Inscription:
         self.prenom = prenom
         self.nb_photos = 0
         self.derniere_tentative = 0.0
+        self.prochaine_photo = time.monotonic() + DELAI_AVANT_PHOTO_S
         self.probleme = None            # Raison du dernier refus, affichée à l'écran
+
+    def secondes_restantes(self):
+        """Temps avant la prochaine photo (0 = on photographie dès que possible)."""
+        return max(0.0, self.prochaine_photo - time.monotonic())
 
     def termine(self):
         return self.nb_photos >= NB_PHOTOS_INSCRIPTION
@@ -354,7 +361,9 @@ class Inscription:
 
     def traiter(self, frame, visages):
         """À appeler à chaque trame, sur l'image BRUTE (avant tout dessin)."""
-        if len(visages) != 1 or time.monotonic() - self.derniere_tentative < INTERVALLE_PHOTOS_S:
+        if len(visages) != 1 or self.secondes_restantes() > 0:
+            return
+        if time.monotonic() - self.derniere_tentative < INTERVALLE_REESSAI_S:
             return
         self.derniere_tentative = time.monotonic()
 
@@ -379,6 +388,7 @@ class Inscription:
         self.base.ajouter_empreinte(self.prenom, empreinte, modele=ia.MODEL_NAME)
         self.nb_photos += 1
         self.probleme = None
+        self.prochaine_photo = time.monotonic() + DELAI_AVANT_PHOTO_S
         print(f"Photo {self.nb_photos}/{NB_PHOTOS_INSCRIPTION} enregistrée pour {self.prenom}.")
 
 
@@ -420,14 +430,18 @@ def dessiner_etat(frame, machine):
 
 def dessiner_inscription(frame, inscription, visages):
     """Bandeau bleu à la place du bandeau d'état : la surveillance est suspendue."""
-    if len(visages) == 1 and inscription.probleme:
-        message = f"Photo refusee : {inscription.probleme}"
-    elif len(visages) == 1:
-        message = f"{inscription.nb_photos}/{NB_PHOTOS_INSCRIPTION} - {inscription.consigne()}"
-    elif not visages:
+    restantes = inscription.secondes_restantes()
+    if not visages:
         message = "Placez-vous face a la camera"
-    else:
+    elif len(visages) > 1:
         message = "Une seule personne dans le cadre"
+    elif restantes > 0:
+        message = (f"{inscription.nb_photos}/{NB_PHOTOS_INSCRIPTION} - {inscription.consigne()}"
+                   f" - photo dans {math.ceil(restantes)} s")
+    elif inscription.probleme:
+        message = f"Photo refusee : {inscription.probleme}"
+    else:
+        message = "Ne bougez plus..."
     cv2.rectangle(frame, (0, HAUTEUR - 75), (LARGEUR, HAUTEUR), COULEUR_BLEU, -1)
     cv2.putText(frame, f"MODE INSCRIPTION : {inscription.prenom}", (15, HAUTEUR - 47),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COULEUR_BLANC, 2)
