@@ -10,8 +10,9 @@ Notre groupe (2 dev, 3 cyber) a **fusionné les volets IA et Cyber** du sujet :
 une IA qui détecte les menaces, sur un pipeline chiffré et durci par la cyber.
 
 Ce dépôt contient le **module vision** : un script Python qui analyse la webcam en temps réel
-et déclenche une alerte d'intrusion quand un visage est **inconnu**, **absent** (dos tourné)
-ou, plus tard, **caché** (masque, cagoule, écharpe, main).
+et déclenche une alerte d'intrusion quand un visage est **inconnu** ou, plus tard, **caché**
+(masque, cagoule, écharpe, main). **Personne devant la caméra = pas d'alerte** (choix du groupe ;
+limite connue pour le pentest : une webcam cachée ressemble aussi à « personne »).
 Il contient aussi le **dashboard de supervision de tout le projet** (`dashboard.py`), demandé par le groupe.
 
 Répartition dans ce module :
@@ -61,12 +62,14 @@ par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de co
 
 - **VERT** : tous les visages du champ sont reconnus. Chrono à 0.
 - **ORANGE** : situation suspecte, chrono démarré. Le message dépend de la cause
-  (`aucun_visage`, `visage_inconnu`, `obstruction`).
+  (`visage_inconnu`, `obstruction`). Aucun visage = VERT (« Surveillance active »).
 - **ROUGE** : menace continue > 3 s. Alerte + affichage « ALERTE INTRUSION ».
 
 Règles :
 - Chrono avec `time.monotonic()`, pas en comptant les trames.
-- **Tolérance** : retour au VERT seulement après 0,5 s de situation normale (hystérésis).
+- **Tolérance** : retour au VERT seulement après 0,5 s de situation normale (hystérésis), et passage
+  à l'ORANGE seulement après 0,3 s de menace continue (`DELAI_ORANGE_S`, évite le clignotement sur une
+  trame isolée sans visage). Le chrono ROUGE part de la première trame suspecte.
 - Règle stricte : un seul visage inconnu suffit, même à côté d'une personne autorisée.
 - Obstruction prise en compte seulement si `confidence >= SEUIL_CONFIANCE` (80 %).
 
@@ -86,6 +89,21 @@ Fait dans `main.py` :
 - Photo locale dans `captures/` au passage en ROUGE (jamais envoyée sur le réseau).
 - BDD branchée : chaque changement d'état va dans `evenements` (pas l'état périodique), la capture
   est reliée à l'alerte ROUGE (`MachineEtats.dernier_evenement_id`). ~1 ms par écriture.
+- **Inscription** : `python main.py --inscription` (seul mode où la touche `e` existe : un intrus ne
+  peut pas s'inscrire en surveillance normale). `e` → prénom saisi dans le terminal (vidéo figée) →
+  5 photos automatiques (une seule personne dans le cadre, pause de 3 s `PAUSE_ENTRE_PHOTOS_S` avant chaque photo pour changer de pose, consigne affichée ; une photo refusée ne compte pas et est retentée en 0,7 s) → une empreinte par photo dans la
+  BDD → `ia.reload_references()`. Surveillance suspendue pendant le scan, événement `INSCRIPTION` en base.
+  Personne révoquée refusée. Empreinte calculée **uniquement** par `ia.reference_embedding(image)`
+  → `(empreinte, probleme)` (jamais recalculée soi-même : sans l'alignement du module IA, elle serait
+  inutilisable sans erreur visible), enregistrée avec `modele=ia.MODEL_NAME`. Garde-fous
+  (`verifier_empreinte`, via `ia.compare`) : cohérence ≥ 0,50 avec les photos de la personne, collision
+  < 0,45 avec les autres. Refus aussi si le visage est **déjà reconnu en direct sous un autre prénom**
+  (couvre la transition dossier → base). Visage obstrué refusé. Raison du refus affichée dans le bandeau.
+  Pendant le scan, les messages portent `"inscription": prenom` (le dashboard ignore alors l'état
+  figé de la vision) ; à la fin, `MachineEtats.reinitialiser()` repart au VERT (pas de ROUGE dû à
+  un vieux chrono).
+  Scores de référence réels (binôme, leave-one-out) : ~0,70 pour une personne autorisée, 0,37 max
+  entre deux personnes, seuil 0,50. Inscrire avec la webcam du poste, pas des photos de téléphone.
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).
 
 Fait dans `dashboard.py` (`python dashboard.py`) : score en grand, tuiles vision / capteurs / réseau
@@ -104,7 +122,13 @@ Les données de la cyber ne sont pas encore disponibles : le dashboard reste sur
 Ne pas inventer de format pour les données réseau : attendre celui du groupe.
 
 À faire :
-- Donner `charger_empreintes()` au binôme pour `reload_references()`.
+- Bascule vers la BDD, **option B retenue** : `main.py` lit la base et appelle
+  `ia.set_references(references)` (`charger_autorises(base)` : au démarrage, après une inscription,
+  touche `r`). Le module IA reste sans dépendance de stockage. Tant que la base est vide ou que
+  `set_references` n'existe pas côté IA, on garde le dossier `autorises/` (message au démarrage).
+  `set_references(references)` ajoutée dans `facial_recognition.py` par nous (4 lignes, à signaler au
+  binôme). Dès qu'il y a une empreinte en base, la reconnaissance passe sur la base et le dossier
+  `autorises/` n'est plus lu par `main.py` : **inscrire joakim en premier**.
 - Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.

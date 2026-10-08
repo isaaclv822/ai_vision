@@ -141,6 +141,17 @@ def reload_references():
     return summary
 
 
+def set_references(references):
+    """
+    Remplace les references par une liste fournie de l'exterieur (option B) :
+    main.py lit la BDD et transmet [(nom, empreinte (1, 128)), ...], deja
+    filtree sur les personnes actives et sur MODEL_NAME. Le module reste ainsi
+    sans dependance de stockage, et test_ia.py continue de lire autorises/.
+    """
+    global _references
+    _references = list(references)
+
+
 def authorized_people():
     """Noms des personnes presentes dans la base, sans doublon."""
     return sorted({name for name, _ in _references})

@@ -94,9 +94,11 @@ class DonneesSimulees:
                 self.debut_intrusion = time.monotonic()
             etat = "ROUGE" if time.monotonic() - self.debut_intrusion >= 3 else "ORANGE"
             donnees.append(("vision", {"etat": etat, "cause": "visage_inconnu", "identites": [],
+                                       "inscription": None,
                                        "similarite": 0.21, "traitement_ms": random.gauss(30, 4)}))
         else:
             donnees.append(("vision", {"etat": "VERT", "cause": None, "identites": ["simulation"],
+                                       "inscription": None,
                                        "similarite": 0.88, "traitement_ms": random.gauss(30, 4)}))
 
         # Capteurs (rien quand on simule un capteur coupé par un attaquant)
@@ -201,6 +203,7 @@ class Dashboard:
         self.raison = None
         self.anomalies = {"capteurs": False, "reseau": False}
         self.etat_vision = None
+        self.inscription_vision = None  # Prénom en cours d'inscription côté vision
         self.cause_vision = None
         self.canal_chiffre = None
         self.payloads_rejetes = 0
@@ -335,7 +338,7 @@ class Dashboard:
         POINT DE BRANCHEMENT : à appeler pour chaque donnée reçue d'une source.
         Aujourd'hui alimenté par DonneesSimulees ; demain par les vraies sources.
         Pour la vision : donnees = le champ "details" des messages de main.py
-        (etat, cause, identites, similarite, traitement_ms), pas l'enveloppe complète.
+        (etat, cause, identites, similarite, traitement_ms, inscription), pas l'enveloppe.
         """
         if source in SOURCES:
             self.derniere_vue[source] = time.monotonic()
@@ -345,7 +348,18 @@ class Dashboard:
 
         if source == "vision":
             etat, cause = donnees["etat"], donnees["cause"]
-            if etat != self.etat_vision and self.etat_vision is not None:
+            inscription = donnees["inscription"]
+            if inscription != self.inscription_vision:
+                if inscription:
+                    self.noter(f"inscription en cours : {inscription} (surveillance vision suspendue)",
+                               "ORANGE")
+                else:
+                    self.noter("fin de l'inscription, surveillance vision reprise", "VERT")
+                self.inscription_vision = inscription
+            if inscription:
+                # Pendant une inscription, l'état de la vision est figé : on l'ignore
+                etat, cause = None, None
+            if etat != self.etat_vision and etat is not None and self.etat_vision is not None:
                 if etat == "ROUGE":
                     self.noter(f"INTRUSION detectee par la vision ({cause})", "ROUGE")
                 else:
@@ -425,8 +439,12 @@ class Dashboard:
         self.detail_score.config(text=self.resume_menace(muettes))
 
         # 2. Tuiles
-        self.label_etat_vision.config(text=f"Etat : {self.etat_vision or '--'}",
-                                      fg=COULEURS[self.etat_vision] if self.etat_vision else TEXTE)
+        if self.inscription_vision:
+            self.label_etat_vision.config(text=f"Etat : INSCRIPTION ({self.inscription_vision})",
+                                          fg="#4fa3e0")
+        else:
+            self.label_etat_vision.config(text=f"Etat : {self.etat_vision or '--'}",
+                                          fg=COULEURS[self.etat_vision] if self.etat_vision else TEXTE)
         self.label_cause_vision.config(text=f"Cause : {self.cause_vision or 'aucune'}")
         for nom, label in (("capteurs", self.label_anomalie_capteurs),
                            ("reseau", self.label_anomalie_reseau)):
