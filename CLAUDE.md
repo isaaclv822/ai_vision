@@ -66,7 +66,9 @@ par le cadrage ou demandé par le groupe ; en cas de doute, demander avant de co
 
 Règles :
 - Chrono avec `time.monotonic()`, pas en comptant les trames.
-- **Tolérance** : retour au VERT seulement après 0,5 s de situation normale (hystérésis).
+- **Tolérance** : retour au VERT seulement après 0,5 s de situation normale (hystérésis), et passage
+  à l'ORANGE seulement après 0,3 s de menace continue (`DELAI_ORANGE_S`, évite le clignotement sur une
+  trame isolée sans visage). Le chrono ROUGE part de la première trame suspecte.
 - Règle stricte : un seul visage inconnu suffit, même à côté d'une personne autorisée.
 - Obstruction prise en compte seulement si `confidence >= SEUIL_CONFIANCE` (80 %).
 
@@ -94,7 +96,11 @@ Fait dans `main.py` :
   → `(empreinte, probleme)` (jamais recalculée soi-même : sans l'alignement du module IA, elle serait
   inutilisable sans erreur visible), enregistrée avec `modele=ia.MODEL_NAME`. Garde-fous
   (`verifier_empreinte`, via `ia.compare`) : cohérence ≥ 0,50 avec les photos de la personne, collision
-  < 0,45 avec les autres. Visage obstrué refusé. Raison du refus affichée dans le bandeau.
+  < 0,45 avec les autres. Refus aussi si le visage est **déjà reconnu en direct sous un autre prénom**
+  (couvre la transition dossier → base). Visage obstrué refusé. Raison du refus affichée dans le bandeau.
+  Pendant le scan, les messages portent `"inscription": prenom` (le dashboard ignore alors l'état
+  figé de la vision) ; à la fin, `MachineEtats.reinitialiser()` repart au VERT (pas de ROUGE dû à
+  un vieux chrono).
   Scores de référence réels (binôme, leave-one-out) : ~0,70 pour une personne autorisée, 0,37 max
   entre deux personnes, seuil 0,50. Inscrire avec la webcam du poste, pas des photos de téléphone.
 - `MODE_SIMULATION = True` pour tester sans webcam ni modèle : touches `i` (inconnu), `n` (aucun visage).

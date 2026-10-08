@@ -33,6 +33,9 @@ NOM_FENETRE = "SENTINEL-X - Vision"
 # Machine à états
 DELAI_ALERTE_S = 3.0               # Menace continue avant de passer au ROUGE
 DELAI_RETOUR_VERT_S = 0.5          # La situation doit rester normale ce temps-là pour revenir au VERT
+DELAI_ORANGE_S = 0.3               # Menace continue avant de passer à l'ORANGE (évite le clignotement
+                                   # sur une trame isolée sans visage ; le chrono ROUGE part quand même
+                                   # de la première trame suspecte)
 SEUIL_CONFIANCE = 0.80             # Réservé au futur modèle d'obstruction
                                    # (le seuil de reconnaissance est réglé dans facial_recognition.py)
 
@@ -166,8 +169,9 @@ class MachineEtats:
         self.etat = "VERT"
         self.cause = None               # Dernière cause de menace vue
         self.identites = []             # Personnes reconnues sur la dernière trame
-        self.debut_menace = None        # Quand le chrono a démarré
+        self.debut_menace = None        # Quand le chrono a démarré (première trame suspecte)
         self.derniere_menace = None     # Dernière trame suspecte vue
+        self.inscription = None         # Prénom en cours d'inscription : surveillance suspendue
         self.similarite = None          # Du visage le plus proche, sur la dernière trame
         self.traitement_ms = 0.0        # Temps de traitement lissé
 
@@ -186,14 +190,19 @@ class MachineEtats:
         self.traitement_ms = traitement_ms
 
         if cause is not None:
-            self.cause = cause
             self.derniere_menace = maintenant
-            if self.etat == "VERT":
-                self.etat = "ORANGE"
+            if self.debut_menace is None:
                 self.debut_menace = maintenant
+            if self.etat == "VERT" and self.duree_menace() >= DELAI_ORANGE_S:
+                self.etat = "ORANGE"
             elif self.etat == "ORANGE" and self.duree_menace() >= DELAI_ALERTE_S:
                 self.etat = "ROUGE"
-        elif self.etat != "VERT":
+            if self.etat != "VERT":
+                self.cause = cause
+        elif self.etat == "VERT":
+            # Menace trop brève pour passer à l'ORANGE : on l'oublie
+            self.debut_menace = None
+        else:
             # Tolérance : quelques trames "tout va bien" ne suffisent pas à tout annuler,
             # il faut que la situation reste normale pendant DELAI_RETOUR_VERT_S.
             if maintenant - self.derniere_menace >= DELAI_RETOUR_VERT_S:
@@ -213,7 +222,19 @@ class MachineEtats:
             "similarite": None if self.similarite is None else round(self.similarite, 2),
             "traitement_ms": round(self.traitement_ms, 1),
             "duree_menace_s": round(self.duree_menace(), 1),
+            # Pendant une inscription, l'état est figé : le dashboard ne doit pas en tenir compte
+            "inscription": self.inscription,
         }
+
+    def reinitialiser(self):
+        """Repart au VERT après une inscription : l'ancien chrono n'a plus de sens."""
+        ancien_etat = self.etat
+        self.etat = "VERT"
+        self.cause = None
+        self.debut_menace = None
+        self.derniere_menace = None
+        if ancien_etat != "VERT":
+            self.publier_changement(ancien_etat)
 
     def publier_changement(self, ancien_etat):
         type_alerte = "ALERTE_INTRUSION" if self.etat == "ROUGE" else "CHANGEMENT_ETAT"
@@ -231,6 +252,13 @@ class MachineEtats:
 # ---------------------------------------------------------------------------
 # Inscription d'une personne autorisée
 # ---------------------------------------------------------------------------
+def terminer_inscription(machine):
+    """Reprend la surveillance après une inscription (terminée ou interrompue)."""
+    machine.inscription = None
+    machine.reinitialiser()
+    machine.publier_etat_periodique()
+
+
 def demander_prenom(base):
     """
     Demande le prénom dans le terminal (la vidéo est figée pendant la saisie).
@@ -330,6 +358,12 @@ class Inscription:
             return
         self.derniere_tentative = time.monotonic()
 
+        # La reconnaissance en direct sait déjà qui est là, quelle que soit sa source
+        # (base ou dossier) : on n'inscrit pas un visage connu sous un autre prénom
+        identite = visages[0]["identity"]
+        if identite is not None and identite != self.prenom:
+            self.probleme = f"visage deja reconnu : {identite}"
+            return
         if visages[0]["obstructed"]:
             self.probleme = "visage obstrue"    # Empoisonnerait la base
             return
@@ -527,6 +561,7 @@ def main():
                     print(f"Inscription de {inscription.prenom} terminée.")
                     charger_autorises(base)
                     inscription = None
+                    terminer_inscription(machine)
             else:
                 ancien_etat = machine.etat
                 # Visages triés par taille : le premier est le plus proche de la caméra
@@ -583,11 +618,14 @@ def main():
                 prenom = demander_prenom(base)
                 if prenom is not None:
                     inscription = Inscription(base, prenom)
+                    machine.inscription = prenom
+                    machine.publier_etat_periodique()   # Prévenir le dashboard tout de suite
             if inscription is not None and touche == 27:      # Echap
                 print(f"Inscription de {inscription.prenom} interrompue "
                       f"({inscription.nb_photos} photo(s) déjà enregistrée(s)).")
                 charger_autorises(base)
                 inscription = None
+                terminer_inscription(machine)
 
             # Sortie aussi par la croix de la fenêtre
             if cv2.getWindowProperty(NOM_FENETRE, cv2.WND_PROP_VISIBLE) < 1:
