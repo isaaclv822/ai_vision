@@ -125,7 +125,9 @@ Ne pas inventer de format pour les données réseau : attendre celui du groupe.
   `ia.set_references(references)` (`charger_autorises(base)` : au démarrage, après une inscription,
   touche `r`). Le module IA reste sans dépendance de stockage. Tant que la base est vide ou que
   `set_references` n'existe pas côté IA, on garde le dossier `autorises/` (message au démarrage).
-  **Reste côté binôme** : écrire `set_references(references)` (remplace sa liste de références).
+  `set_references(references)` ajoutée dans `facial_recognition.py` par nous (4 lignes, à signaler au
+  binôme). Dès qu'il y a une empreinte en base, la reconnaissance passe sur la base et le dossier
+  `autorises/` n'est plus lu par `main.py` : **inscrire joakim en premier**.
 - Décider avec le binôme comment inscrire une personne (script d'inscription ou `test_ia.py`).
 - Brancher les vraies données dans `Dashboard.recevoir` quand le groupe les fournira.
 - Détection d'obstruction (binôme IA) : rien à changer dans `main.py` quand elle arrivera.
