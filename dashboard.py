@@ -9,16 +9,22 @@ Affiche, pour le jury et pendant le pentest :
   5. les indicateurs cyber : canal chiffré et payloads rejetés
   + un bouton « Alerte prise en compte », comme dans un vrai SOC
 
-POUR L'INSTANT, TOUTES LES DONNÉES SONT SIMULÉES (classe DonneesSimulees) :
-la BDD des visages et les données réseau / cyber ne sont pas encore disponibles.
+Sources :
+  - VISION : vraies données, lues dans la BDD (table etat_courant, écrite par main.py)
+  - capteurs, réseau, score, cyber : ENCORE SIMULÉES (classe DonneesSimulees),
+    en attendant les données de l'équipe cyber
 Point de branchement pour les vraies données : Dashboard.recevoir(source, donnees).
 """
 
 import random
+import sqlite3
 import time
 import tkinter as tk
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
+
+from base_donnees import BaseDonnees
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -26,6 +32,7 @@ from pathlib import Path
 SILENCE_MAX_S = 5.0                # Au-delà, une source est déclarée muette
 RAFRAICHISSEMENT_MS = 250          # Mise à jour de l'affichage
 PERIODE_SIMULATION_MS = 1000       # Les sources simulées envoient une donnée par seconde
+PERIODE_LECTURE_BDD_MS = 500       # Relecture de l'état de la vision dans la BDD
 TAILLE_COURBES = 60                # Nombre de points par courbe (~1 min)
 TAILLE_JOURNAL = 200               # Lignes gardées à l'écran (le fichier garde tout)
 DOSSIER_JOURNAUX = Path(__file__).parent / "journaux"
@@ -62,8 +69,6 @@ class DonneesSimulees:
         ("normal", 10),
         ("fuite_gaz", 10),
         ("normal", 10),
-        ("intrusion_vision", 8),
-        ("normal", 10),
         ("capteur_muet", 8),
         ("payload_rejete", 1),
     ]
@@ -72,7 +77,6 @@ class DonneesSimulees:
         self.debut = time.monotonic()
         self.connexions_refusees = 0
         self.payloads_rejetes = 0
-        self.phase_precedente = None
 
     def phase(self):
         duree_totale = sum(duree for _, duree in self.SCENARIO)
@@ -88,18 +92,7 @@ class DonneesSimulees:
         phase = self.phase()
         donnees = []
 
-        # Vision : 3 s d'ORANGE puis ROUGE, comme la vraie machine à états
-        if phase == "intrusion_vision":
-            if self.phase_precedente != phase:
-                self.debut_intrusion = time.monotonic()
-            etat = "ROUGE" if time.monotonic() - self.debut_intrusion >= 3 else "ORANGE"
-            donnees.append(("vision", {"etat": etat, "cause": "visage_inconnu", "identites": [],
-                                       "inscription": None,
-                                       "similarite": 0.21, "traitement_ms": random.gauss(30, 4)}))
-        else:
-            donnees.append(("vision", {"etat": "VERT", "cause": None, "identites": ["simulation"],
-                                       "inscription": None,
-                                       "similarite": 0.88, "traitement_ms": random.gauss(30, 4)}))
+        # La vision n'est plus simulée : elle vient de la BDD (voir Dashboard.lire_bdd)
 
         # Capteurs (rien quand on simule un capteur coupé par un attaquant)
         if phase != "capteur_muet":
@@ -135,7 +128,6 @@ class DonneesSimulees:
                                   "payloads_rejetes": self.payloads_rejetes,
                                   "dernier_rejet": dernier_rejet}))
 
-        self.phase_precedente = phase
         return donnees
 
 
@@ -211,14 +203,18 @@ class Dashboard:
         self.etat_global = None
         self.debut_rouge = None
         self.acquittee = False
+        self.dernier_horodatage_vision = None   # Pour ne transmettre que les nouveaux états
 
         DOSSIER_JOURNAUX.mkdir(exist_ok=True)
         self.fichier_journal = DOSSIER_JOURNAUX / time.strftime("journal_%Y%m%d.log")
 
         self.construire_interface()
-        self.noter("demarrage du dashboard (donnees simulees)")
+        self.noter("demarrage du dashboard (vision reelle, autres sources simulees)")
 
+        self.base = BaseDonnees()
         self.simulation = DonneesSimulees()
+        racine.protocol("WM_DELETE_WINDOW", self.fermer)
+        racine.after(PERIODE_LECTURE_BDD_MS, self.lire_bdd)
         racine.after(PERIODE_SIMULATION_MS, self.tick_simulation)
         racine.after(RAFRAICHISSEMENT_MS, self.rafraichir)
 
@@ -237,8 +233,9 @@ class Dashboard:
         haut.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
         tk.Label(haut, text="SENTINEL-X // CENTRE DE SUPERVISION", bg=FOND, fg=TEXTE,
                  font=(POLICE, 16, "bold")).pack(side="left")
-        # Honnêteté envers le jury : on affiche clairement que les données sont simulées
-        tk.Label(haut, text="DONNEES SIMULEES", bg=COULEURS["ORANGE"], fg="black",
+        # Honnêteté envers le jury : on affiche clairement ce qui est encore simulé
+        tk.Label(haut, text="VISION REELLE | CAPTEURS, RESEAU, CYBER SIMULES",
+                 bg=COULEURS["ORANGE"], fg="black",
                  font=(POLICE, 10, "bold"), padx=6).pack(side="left", padx=14)
         self.horloge = tk.Label(haut, bg=FOND, fg=GRIS, font=(POLICE, 14))
         self.horloge.pack(side="right")
@@ -328,6 +325,22 @@ class Dashboard:
             fichier.write(f"{time.strftime('%Y-%m-%d')} {ligne}")
 
     # --- Réception des données ----------------------------------------------
+    def lire_bdd(self):
+        """Relit l'état de la vision écrit par main.py, et le transmet s'il est nouveau."""
+        try:
+            etat = self.base.lire_etat_courant("vision")
+        except sqlite3.OperationalError:
+            etat = None     # Base momentanément occupée : on réessaie au prochain tour
+        if etat is not None:
+            horodatage, details = etat
+            if horodatage != self.dernier_horodatage_vision:
+                self.dernier_horodatage_vision = horodatage
+                # Un vieil état (main.py arrêté depuis longtemps) ne prouve pas que la vision vit
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(horodatage)).total_seconds()
+                if age < SILENCE_MAX_S:
+                    self.recevoir("vision", details)
+        self.racine.after(PERIODE_LECTURE_BDD_MS, self.lire_bdd)
+
     def tick_simulation(self):
         for source, donnees in self.simulation.generer():
             self.recevoir(source, donnees)
@@ -336,7 +349,7 @@ class Dashboard:
     def recevoir(self, source, donnees):
         """
         POINT DE BRANCHEMENT : à appeler pour chaque donnée reçue d'une source.
-        Aujourd'hui alimenté par DonneesSimulees ; demain par les vraies sources.
+        Vision : alimentée par lire_bdd() ; autres sources : par DonneesSimulees.
         Pour la vision : donnees = le champ "details" des messages de main.py
         (etat, cause, identites, similarite, traitement_ms, inscription), pas l'enveloppe.
         """
@@ -503,6 +516,10 @@ class Dashboard:
         delai = time.monotonic() - self.debut_rouge
         self.acquittee = True
         self.noter(f"alerte prise en compte par l'operateur ({delai:.0f} s apres le passage au rouge)")
+
+    def fermer(self):
+        self.base.fermer()
+        self.racine.destroy()
 
 
 if __name__ == "__main__":
